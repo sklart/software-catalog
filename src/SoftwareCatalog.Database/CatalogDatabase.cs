@@ -1,31 +1,33 @@
 using Microsoft.Data.Sqlite;
 using SoftwareCatalog.Core.Abstractions;
 using SoftwareCatalog.Core.Domain;
+using SoftwareCatalog.Database.Migrations;
 
 namespace SoftwareCatalog.Database;
-
-public sealed class CatalogDatabase(string databasePath) : IInstallerFileRepository
+public sealed class CatalogDatabase(string databasePath) : IScanCatalogRepository
 {
-    private readonly string _connectionString = new SqliteConnectionStringBuilder { DataSource = databasePath }.ToString();
+    private readonly string _connectionString = new SqliteConnectionStringBuilder { DataSource = databasePath, Mode = SqliteOpenMode.ReadWriteCreate, Cache = SqliteCacheMode.Shared, Pooling = false }.ToString();
+    private static readonly IMigration[] Migrations = [new Migration001Initial()];
     public async Task InitializeAsync(CancellationToken cancellationToken)
     {
-        var directory = Path.GetDirectoryName(databasePath); if (!string.IsNullOrWhiteSpace(directory)) Directory.CreateDirectory(directory);
-        await using var connection = new SqliteConnection(_connectionString); await connection.OpenAsync(cancellationToken);
-        await using var command = connection.CreateCommand(); command.CommandText = Schema.Sql; await command.ExecuteNonQueryAsync(cancellationToken);
+        Directory.CreateDirectory(Path.GetDirectoryName(databasePath)!); await using var connection = await OpenAsync(cancellationToken);
+        await using (var command = connection.CreateCommand()) { command.CommandText = "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_utc TEXT NOT NULL);"; await command.ExecuteNonQueryAsync(cancellationToken); }
+        foreach (var migration in Migrations)
+        {
+            await using var check = connection.CreateCommand(); check.CommandText = "SELECT COUNT(*) FROM schema_migrations WHERE version=$version"; check.Parameters.AddWithValue("$version", migration.Version);
+            if (Convert.ToInt32(await check.ExecuteScalarAsync(cancellationToken)) != 0) continue;
+            await using var transaction = await connection.BeginTransactionAsync(cancellationToken); await migration.ApplyAsync(connection, (SqliteTransaction)transaction, cancellationToken);
+            await using var mark = connection.CreateCommand(); mark.Transaction = (SqliteTransaction)transaction; mark.CommandText = "INSERT INTO schema_migrations(version, applied_utc) VALUES($version,$utc)"; mark.Parameters.AddWithValue("$version", migration.Version); mark.Parameters.AddWithValue("$utc", DateTimeOffset.UtcNow.ToString("O")); await mark.ExecuteNonQueryAsync(cancellationToken); await transaction.CommitAsync(cancellationToken);
+        }
     }
-    public async Task<InstallerFile?> FindByPathAsync(string fullPath, CancellationToken cancellationToken)
-    {
-        await using var connection = new SqliteConnection(_connectionString); await connection.OpenAsync(cancellationToken);
-        await using var command = connection.CreateCommand(); command.CommandText = "SELECT full_path,file_name,extension,size,last_write_utc,sha256,first_seen_utc,last_seen_utc,exists_flag FROM installer_files WHERE full_path=$path"; command.Parameters.AddWithValue("$path", fullPath);
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken); if (!await reader.ReadAsync(cancellationToken)) return null;
-        return new(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetInt64(3), DateTimeOffset.Parse(reader.GetString(4)), reader.IsDBNull(5) ? null : reader.GetString(5), DateTimeOffset.Parse(reader.GetString(6)), DateTimeOffset.Parse(reader.GetString(7)), reader.GetBoolean(8));
-    }
-    public async Task UpsertAsync(InstallerFile file, CancellationToken cancellationToken)
-    {
-        await using var connection = new SqliteConnection(_connectionString); await connection.OpenAsync(cancellationToken);
-        await using var command = connection.CreateCommand();
-        command.CommandText = """INSERT INTO installer_files(full_path,file_name,extension,size,last_write_utc,sha256,first_seen_utc,last_seen_utc,exists_flag) VALUES($path,$name,$extension,$size,$modified,$hash,$firstSeen,$lastSeen,$exists) ON CONFLICT(full_path) DO UPDATE SET file_name=excluded.file_name,extension=excluded.extension,size=excluded.size,last_write_utc=excluded.last_write_utc,sha256=excluded.sha256,last_seen_utc=excluded.last_seen_utc,exists_flag=excluded.exists_flag;""";
-        command.Parameters.AddWithValue("$path", file.FullPath); command.Parameters.AddWithValue("$name", file.FileName); command.Parameters.AddWithValue("$extension", file.Extension); command.Parameters.AddWithValue("$size", file.Size); command.Parameters.AddWithValue("$modified", file.LastWriteTimeUtc.ToString("O")); command.Parameters.AddWithValue("$hash", (object?)file.Sha256 ?? DBNull.Value); command.Parameters.AddWithValue("$firstSeen", file.FirstSeenUtc.ToString("O")); command.Parameters.AddWithValue("$lastSeen", file.LastSeenUtc.ToString("O")); command.Parameters.AddWithValue("$exists", file.Exists);
-        await command.ExecuteNonQueryAsync(cancellationToken);
-    }
+    public async Task<IReadOnlyList<ScanRoot>> GetScanRootsAsync(CancellationToken token) { var result = new List<ScanRoot>(); await using var c = await OpenAsync(token); await using var cmd = c.CreateCommand(); cmd.CommandText = "SELECT id,stored_path,path_kind,include_subdirectories,enabled,created_utc,updated_utc FROM scan_roots ORDER BY id"; await using var r = await cmd.ExecuteReaderAsync(token); while (await r.ReadAsync(token)) result.Add(new(r.GetInt64(0), r.GetString(1), (ScanRootPathKind)r.GetInt32(2), r.GetBoolean(3), r.GetBoolean(4), DateTimeOffset.Parse(r.GetString(5)), DateTimeOffset.Parse(r.GetString(6)))); return result; }
+    public async Task<ScanRoot> AddScanRootAsync(string path, ScanRootPathKind kind, bool include, CancellationToken token) { var now = DateTimeOffset.UtcNow; await using var c = await OpenAsync(token); await using var cmd = c.CreateCommand(); cmd.CommandText = "INSERT INTO scan_roots(stored_path,path_kind,include_subdirectories,enabled,created_utc,updated_utc) VALUES($p,$k,$i,1,$now,$now); SELECT last_insert_rowid();"; cmd.Parameters.AddWithValue("$p", path); cmd.Parameters.AddWithValue("$k", (int)kind); cmd.Parameters.AddWithValue("$i", include); cmd.Parameters.AddWithValue("$now", now.ToString("O")); var id = Convert.ToInt64(await cmd.ExecuteScalarAsync(token)); return new(id, path, kind, include, true, now, now); }
+    public async Task RemoveScanRootAsync(long id, CancellationToken token) { await using var c = await OpenAsync(token); await using var cmd = c.CreateCommand(); cmd.CommandText = "DELETE FROM scan_roots WHERE id=$id"; cmd.Parameters.AddWithValue("$id", id); await cmd.ExecuteNonQueryAsync(token); }
+    public async Task<InstallerFile?> FindInstallerAsync(long root, string relative, CancellationToken token) { await using var c = await OpenAsync(token); await using var cmd = c.CreateCommand(); cmd.CommandText = "SELECT id,scan_root_id,relative_path,file_name,extension,size,last_write_utc,sha256,first_seen_utc,last_seen_utc,exists_flag FROM installer_files WHERE scan_root_id=$root AND relative_path=$path"; cmd.Parameters.AddWithValue("$root", root); cmd.Parameters.AddWithValue("$path", relative); await using var r = await cmd.ExecuteReaderAsync(token); return await r.ReadAsync(token) ? ReadFile(r) : null; }
+    public async Task UpsertInstallersAsync(IReadOnlyList<InstallerFile> files, CancellationToken token) { if (files.Count == 0) return; await using var c = await OpenAsync(token); await using var t = await c.BeginTransactionAsync(token); foreach (var f in files) { await using var cmd = c.CreateCommand(); cmd.Transaction = (SqliteTransaction)t; cmd.CommandText = "INSERT INTO installer_files(scan_root_id,relative_path,file_name,extension,size,last_write_utc,sha256,first_seen_utc,last_seen_utc,exists_flag) VALUES($r,$p,$n,$e,$s,$m,$h,$f,$l,1) ON CONFLICT(scan_root_id,relative_path) DO UPDATE SET file_name=excluded.file_name,extension=excluded.extension,size=excluded.size,last_write_utc=excluded.last_write_utc,sha256=excluded.sha256,last_seen_utc=excluded.last_seen_utc,exists_flag=1"; AddFileParameters(cmd, f); await cmd.ExecuteNonQueryAsync(token); } await t.CommitAsync(token); }
+    public async Task MarkMissingAsync(long root, DateTimeOffset started, CancellationToken token) { await using var c = await OpenAsync(token); await using var cmd = c.CreateCommand(); cmd.CommandText = "UPDATE installer_files SET exists_flag=0 WHERE scan_root_id=$root AND last_seen_utc < $started"; cmd.Parameters.AddWithValue("$root", root); cmd.Parameters.AddWithValue("$started", started.ToString("O")); await cmd.ExecuteNonQueryAsync(token); }
+    public async Task<IReadOnlyList<InstallerFile>> GetInstallersAsync(CancellationToken token) { var files = new List<InstallerFile>(); await using var c = await OpenAsync(token); await using var cmd = c.CreateCommand(); cmd.CommandText = "SELECT id,scan_root_id,relative_path,file_name,extension,size,last_write_utc,sha256,first_seen_utc,last_seen_utc,exists_flag FROM installer_files ORDER BY id"; await using var r = await cmd.ExecuteReaderAsync(token); while (await r.ReadAsync(token)) files.Add(ReadFile(r)); return files; }
+    private async Task<SqliteConnection> OpenAsync(CancellationToken token) { var c = new SqliteConnection(_connectionString); await c.OpenAsync(token); await using var cmd = c.CreateCommand(); cmd.CommandText = "PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;"; await cmd.ExecuteNonQueryAsync(token); return c; }
+    private static InstallerFile ReadFile(SqliteDataReader r) => new(r.GetInt64(0),r.GetInt64(1),r.GetString(2),r.GetString(3),r.GetString(4),r.GetInt64(5),DateTimeOffset.Parse(r.GetString(6)),r.IsDBNull(7)?null:r.GetString(7),DateTimeOffset.Parse(r.GetString(8)),DateTimeOffset.Parse(r.GetString(9)),r.GetBoolean(10));
+    private static void AddFileParameters(SqliteCommand c, InstallerFile f) { c.Parameters.AddWithValue("$r",f.ScanRootId); c.Parameters.AddWithValue("$p",f.RelativePath); c.Parameters.AddWithValue("$n",f.FileName); c.Parameters.AddWithValue("$e",f.Extension); c.Parameters.AddWithValue("$s",f.Size); c.Parameters.AddWithValue("$m",f.LastWriteTimeUtc.ToString("O")); c.Parameters.AddWithValue("$h",(object?)f.Sha256??DBNull.Value); c.Parameters.AddWithValue("$f",f.FirstSeenUtc.ToString("O")); c.Parameters.AddWithValue("$l",f.LastSeenUtc.ToString("O")); }
 }

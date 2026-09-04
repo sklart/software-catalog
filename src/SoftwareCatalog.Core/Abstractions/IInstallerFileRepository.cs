@@ -2,8 +2,13 @@ using SoftwareCatalog.Core.Domain;
 
 namespace SoftwareCatalog.Core.Abstractions;
 
-public interface IInstallerFileRepository
+public interface IScanCatalogRepository
 {
-    Task<InstallerFile?> FindByPathAsync(string fullPath, CancellationToken cancellationToken);
-    Task UpsertAsync(InstallerFile installerFile, CancellationToken cancellationToken);
+    Task<IReadOnlyList<ScanRoot>> GetScanRootsAsync(CancellationToken cancellationToken);
+    Task<ScanRoot> AddScanRootAsync(string storedPath, ScanRootPathKind pathKind, bool includeSubdirectories, CancellationToken cancellationToken);
+    Task RemoveScanRootAsync(long id, CancellationToken cancellationToken);
+    Task<InstallerFile?> FindInstallerAsync(long scanRootId, string relativePath, CancellationToken cancellationToken);
+    Task UpsertInstallersAsync(IReadOnlyList<InstallerFile> installers, CancellationToken cancellationToken);
+    Task MarkMissingAsync(long scanRootId, DateTimeOffset scanStartedUtc, CancellationToken cancellationToken);
+    Task<IReadOnlyList<InstallerFile>> GetInstallersAsync(CancellationToken cancellationToken);
 }
