@@ -20,5 +20,5 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private async Task RefreshFilesAsync() { Files.Clear(); foreach (var file in await _repository.GetInstallersAsync(CancellationToken.None)) Files.Add(file); }
     public event PropertyChangedEventHandler? PropertyChanged; private void OnChanged([CallerMemberName] string? name = null) => PropertyChanged?.Invoke(this, new(name));
 }
-public sealed class RelayCommand(Action execute) : ICommand { public event EventHandler? CanExecuteChanged; public bool CanExecute(object? parameter) => true; public void Execute(object? parameter) => execute(); }
-public sealed class AsyncCommand(Func<Task> execute) : ICommand { public event EventHandler? CanExecuteChanged; public bool CanExecute(object? parameter) => true; public async void Execute(object? parameter) => await execute(); }
+public sealed class RelayCommand(Action execute) : ICommand { public event EventHandler? CanExecuteChanged { add { } remove { } } public bool CanExecute(object? parameter) => true; public void Execute(object? parameter) => execute(); }
+public sealed class AsyncCommand(Func<Task> execute) : ICommand { public event EventHandler? CanExecuteChanged { add { } remove { } } public bool CanExecute(object? parameter) => true; public async void Execute(object? parameter) => await execute(); }

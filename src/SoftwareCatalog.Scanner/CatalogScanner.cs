@@ -1,91 +1,161 @@
+using System.Collections.Concurrent;
 using System.Threading.Channels;
 using SoftwareCatalog.Core.Abstractions;
 using SoftwareCatalog.Core.Domain;
 
 namespace SoftwareCatalog.Scanner;
 
-public sealed class CatalogScanner(IScanCatalogRepository repository, IPortablePathResolver paths, IFileHashCalculator hashCalculator, CatalogScannerOptions options)
+public sealed class CatalogScanner(
+    IScanCatalogRepository repository,
+    IPortablePathResolver paths,
+    IFileHashCalculator hashCalculator,
+    CatalogScannerOptions options)
 {
     private const int BatchSize = 100;
 
-    public async Task<ScanResult> ScanAsync(ScanRoot root, IProgress<ScanProgress>? progress, CancellationToken cancellationToken)
+    public async Task<ScanResult> ScanAsync(
+        ScanRoot root,
+        IProgress<ScanProgress>? progress,
+        CancellationToken cancellationToken)
     {
         var started = DateTimeOffset.UtcNow;
-        var errors = new List<ScanError>();
-        var counters = new Counters();
+        var errors = new ConcurrentQueue<ScanError>();
+        var counters = new ScanCounters();
         var resolvedRoot = paths.Resolve(root);
-        if (!Directory.Exists(resolvedRoot)) return new ScanResult(0, 0, [new ScanError(resolvedRoot, "Scan root does not exist.")], false);
+        if (!Directory.Exists(resolvedRoot))
+        {
+            return new ScanResult(0, 0, [new ScanError(resolvedRoot, "Scan root does not exist.")], false);
+        }
 
+        using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var token = linkedCancellation.Token;
         var input = Channel.CreateBounded<string>(new BoundedChannelOptions(256) { FullMode = BoundedChannelFullMode.Wait });
         var output = Channel.CreateBounded<InstallerFile>(new BoundedChannelOptions(256) { FullMode = BoundedChannelFullMode.Wait });
         var reporter = new ProgressReporter(progress, counters, errors);
-        var writer = WriteAsync(output.Reader, repository, cancellationToken);
-        var workers = Enumerable.Range(0, options.MaxDegreeOfParallelism).Select(_ => ProcessAsync(input.Reader, output.Writer, root, reporter, errors, cancellationToken)).ToArray();
+        var completeTraversal = true;
+
         try
         {
-            await Task.Run(async () =>
+            var producer = ProduceAsync(resolvedRoot, root.IncludeSubdirectories, input.Writer, errors, counters, reporter, token, () => completeTraversal = false);
+            var workers = Enumerable.Range(0, options.MaxDegreeOfParallelism).Select(_ => ProcessAsync(input.Reader, output.Writer, root, errors, counters, reporter, token)).ToArray();
+            var writer = WriteAsync(output.Reader, token);
+            await producer;
+            input.Writer.TryComplete();
+            await Task.WhenAll(workers);
+            output.Writer.TryComplete();
+            await writer;
+
+            if (completeTraversal && errors.IsEmpty)
             {
-                foreach (var path in EnumerateFilesSafely(resolvedRoot, root.IncludeSubdirectories, cancellationToken, errors))
-                {
-                    if (!options.SupportedExtensions.Contains(Path.GetExtension(path))) continue;
-                    await input.Writer.WriteAsync(path, cancellationToken); Interlocked.Increment(ref counters.Discovered); reporter.Report();
-                }
-            }, cancellationToken);
-            input.Writer.TryComplete(); await Task.WhenAll(workers); output.Writer.TryComplete(); await writer;
-            await repository.MarkMissingAsync(root.Id, started, cancellationToken);
-            reporter.Report(); return new(counters.Discovered, counters.Processed, errors, true);
+                await repository.MarkMissingAsync(root.Id, started, token);
+            }
+
+            reporter.Report(force: true);
+            return new ScanResult(counters.Discovered, counters.Processed, errors.ToArray(), completeTraversal && errors.IsEmpty);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            input.Writer.TryComplete(); output.Writer.TryComplete(); return new(counters.Discovered, counters.Processed, errors, false);
+            linkedCancellation.Cancel();
+            return new ScanResult(counters.Discovered, counters.Processed, errors.ToArray(), false);
+        }
+        catch (Exception exception)
+        {
+            linkedCancellation.Cancel();
+            errors.Enqueue(new ScanError(resolvedRoot, exception.Message));
+            return new ScanResult(counters.Discovered, counters.Processed, errors.ToArray(), false);
+        }
+        finally
+        {
+            input.Writer.TryComplete();
+            output.Writer.TryComplete();
         }
     }
 
-    private async Task ProcessAsync(ChannelReader<string> reader, ChannelWriter<InstallerFile> writer, ScanRoot root, ProgressReporter reporter, List<ScanError> errors, CancellationToken token)
+    private async Task ProduceAsync(string root, bool recurse, ChannelWriter<string> writer, ConcurrentQueue<ScanError> errors, ScanCounters counters, ProgressReporter reporter, CancellationToken token, Action markPartial)
+    {
+        await Task.Run(async () =>
+        {
+            foreach (var file in EnumerateFiles(root, recurse, errors, token, markPartial))
+            {
+                if (!options.SupportedExtensions.Contains(Path.GetExtension(file))) continue;
+                await writer.WriteAsync(file, token);
+                Interlocked.Increment(ref counters.Discovered);
+                reporter.Report();
+            }
+        }, token);
+    }
+
+    private async Task ProcessAsync(ChannelReader<string> reader, ChannelWriter<InstallerFile> writer, ScanRoot root, ConcurrentQueue<ScanError> errors, ScanCounters counters, ProgressReporter reporter, CancellationToken token)
     {
         await foreach (var path in reader.ReadAllAsync(token))
         {
             try
             {
-                var info = new FileInfo(path); var relative = paths.GetRelativePath(root, info.FullName); var existing = await repository.FindInstallerAsync(root.Id, relative, token);
+                var info = new FileInfo(path);
+                var relativePath = paths.GetRelativePath(root, info.FullName);
+                var existing = await repository.FindInstallerAsync(root.Id, relativePath, token);
                 var unchanged = existing is not null && existing.Size == info.Length && existing.LastWriteTimeUtc == info.LastWriteTimeUtc;
-                var hash = unchanged ? existing!.Sha256 : await hashCalculator.ComputeSha256Async(info.FullName, token); var now = DateTimeOffset.UtcNow;
-                await writer.WriteAsync(new(existing?.Id ?? 0, root.Id, relative, info.Name, info.Extension.ToLowerInvariant(), info.Length, info.LastWriteTimeUtc, hash, existing?.FirstSeenUtc ?? now, now, true), token);
-                Interlocked.Increment(ref reporter.Counters.Processed); reporter.Report();
+                var hash = unchanged ? existing!.Sha256 : await hashCalculator.ComputeSha256Async(info.FullName, token);
+                var now = DateTimeOffset.UtcNow;
+                await writer.WriteAsync(new InstallerFile(existing?.Id ?? 0, root.Id, relativePath, info.Name, info.Extension.ToLowerInvariant(), info.Length, info.LastWriteTimeUtc, hash, existing?.FirstSeenUtc ?? now, now, true), token);
+                Interlocked.Increment(ref counters.Processed);
+                reporter.Report();
             }
-            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException) { lock (errors) errors.Add(new(path, exception.Message)); Interlocked.Increment(ref reporter.Counters.Errors); reporter.Report(); }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                errors.Enqueue(new ScanError(path, exception.Message));
+                Interlocked.Increment(ref counters.Errors);
+                reporter.Report();
+            }
         }
     }
 
-    private static async Task WriteAsync(ChannelReader<InstallerFile> reader, IScanCatalogRepository repository, CancellationToken token)
+    private async Task WriteAsync(ChannelReader<InstallerFile> reader, CancellationToken token)
     {
         var batch = new List<InstallerFile>(BatchSize);
-        await foreach (var item in reader.ReadAllAsync(token)) { batch.Add(item); if (batch.Count == BatchSize) { await repository.UpsertInstallersAsync(batch, token); batch.Clear(); } }
+        await foreach (var file in reader.ReadAllAsync(token))
+        {
+            batch.Add(file);
+            if (batch.Count < BatchSize) continue;
+            await repository.UpsertInstallersAsync(batch, token);
+            batch.Clear();
+        }
+
         if (batch.Count > 0) await repository.UpsertInstallersAsync(batch, token);
     }
 
-    private static IEnumerable<string> EnumerateFilesSafely(string root, bool recurse, CancellationToken token, List<ScanError> errors)
+    private static IEnumerable<string> EnumerateFiles(string root, bool recurse, ConcurrentQueue<ScanError> errors, CancellationToken token, Action markPartial)
     {
-        var directories = new Stack<string>(); directories.Push(root);
+        var directories = new Stack<string>();
+        directories.Push(root);
         while (directories.Count > 0)
         {
-            token.ThrowIfCancellationRequested(); var directory = directories.Pop();
-            IEnumerable<string> files;
-            try { files = Directory.EnumerateFiles(directory); } catch (Exception exception) when (exception is IOException or UnauthorizedAccessException) { errors.Add(new(directory, exception.Message)); continue; }
+            token.ThrowIfCancellationRequested();
+            var directory = directories.Pop();
+            var files = Array.Empty<string>();
+            try { files = Directory.EnumerateFiles(directory).ToArray(); }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException) { errors.Enqueue(new ScanError(directory, exception.Message)); markPartial(); }
             foreach (var file in files) { token.ThrowIfCancellationRequested(); yield return file; }
             if (!recurse) continue;
-            IEnumerable<string> children;
-            try { children = Directory.EnumerateDirectories(directory); } catch (Exception exception) when (exception is IOException or UnauthorizedAccessException) { errors.Add(new(directory, exception.Message)); continue; }
-            foreach (var child in children) { token.ThrowIfCancellationRequested(); if ((File.GetAttributes(child) & FileAttributes.ReparsePoint) == 0) directories.Push(child); }
+            IEnumerator<string>? children = null;
+            try { children = Directory.EnumerateDirectories(directory).GetEnumerator(); while (children.MoveNext()) { token.ThrowIfCancellationRequested(); var child = children.Current; try { if ((File.GetAttributes(child) & FileAttributes.ReparsePoint) == 0) directories.Push(child); } catch (Exception exception) when (exception is IOException or UnauthorizedAccessException) { errors.Enqueue(new ScanError(child, exception.Message)); markPartial(); } } }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException) { errors.Enqueue(new ScanError(directory, exception.Message)); markPartial(); }
+            finally { children?.Dispose(); }
         }
     }
 }
+
 public sealed record ScanResult(int DiscoveredFiles, int ProcessedFiles, IReadOnlyList<ScanError> Errors, bool Completed);
 public sealed record ScanError(string Path, string Message);
 public sealed record ScanProgress(int Discovered, int Processed, int Errors, string? CurrentFile);
-public sealed class Counters { public int Discovered; public int Processed; public int Errors; }
-public sealed class ProgressReporter(IProgress<ScanProgress>? progress, Counters counters, List<ScanError> errors)
+public sealed class ScanCounters { public int Discovered; public int Processed; public int Errors; }
+public sealed class ProgressReporter(IProgress<ScanProgress>? progress, ScanCounters counters, ConcurrentQueue<ScanError> errors)
 {
-    private long _last; public Counters Counters => counters;
-    public void Report() { if (progress is null || Environment.TickCount64 - Interlocked.Read(ref _last) < 150) return; Interlocked.Exchange(ref _last, Environment.TickCount64); progress.Report(new(Volatile.Read(ref counters.Discovered), Volatile.Read(ref counters.Processed), errors.Count, null)); }
+    private long _last;
+    public void Report(bool force = false)
+    {
+        if (progress is null || (!force && Environment.TickCount64 - Interlocked.Read(ref _last) < 150)) return;
+        Interlocked.Exchange(ref _last, Environment.TickCount64);
+        progress.Report(new ScanProgress(Volatile.Read(ref counters.Discovered), Volatile.Read(ref counters.Processed), errors.Count, null));
+    }
 }
