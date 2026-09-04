@@ -1,0 +1,25 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\SoftwareCatalog.Core\SoftwareCatalog.Core.csproj" />
+    <ProjectReference Include="..\SoftwareCatalog.Scanner\SoftwareCatalog.Scanner.csproj" />
+    <ProjectReference Include="..\SoftwareCatalog.Database\SoftwareCatalog.Database.csproj" />
+    <ProjectReference Include="..\SoftwareCatalog.Providers\SoftwareCatalog.Providers.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <EnableDefaultApplicationDefinition>false</EnableDefaultApplicationDefinition>
+    <EnableDefaultPageItems>false</EnableDefaultPageItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Remove="App.xaml.cs" />
+    <Compile Remove="MainWindow.xaml.cs" />
+  </ItemGroup>
+
+</Project>
