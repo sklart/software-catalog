@@ -10,4 +10,6 @@ jobs:
       - run: dotnet restore
       - run: dotnet build --configuration Release --no-restore
       - run: dotnet test --configuration Release --no-build
-      - run: dotnet publish src/SoftwareCatalog.UI/SoftwareCatalog.UI.csproj --configuration Release --runtime win-x64 --self-contained true
+      - run: .\tools\publish-portable.ps1
+      - run: Test-Path artifacts\SoftwareCatalog-portable-win-x64.zip
+      - run: dotnet list package --vulnerable --include-transitive

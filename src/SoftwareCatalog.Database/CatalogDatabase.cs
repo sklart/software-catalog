@@ -7,7 +7,7 @@ namespace SoftwareCatalog.Database;
 public sealed class CatalogDatabase(string databasePath) : IScanCatalogRepository
 {
     private readonly string _connectionString = new SqliteConnectionStringBuilder { DataSource = databasePath, Mode = SqliteOpenMode.ReadWriteCreate, Cache = SqliteCacheMode.Shared, Pooling = false }.ToString();
-    private static readonly IMigration[] Migrations = [new Migration001Initial()];
+    private static readonly IMigration[] Migrations = [new Migration001Initial(), new Migration002CaseInsensitivePaths()];
     public async Task InitializeAsync(CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(databasePath)!); await using var connection = await OpenAsync(cancellationToken);
