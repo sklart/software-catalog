@@ -11,10 +11,12 @@ public sealed class CatalogScanner(
     IFileHashCalculator hashCalculator,
     CatalogScannerOptions options,
     IAppLogger? logger = null,
-    IFileSystemEnumerator? fileSystemEnumerator = null)
+    IFileSystemEnumerator? fileSystemEnumerator = null,
+    InstallerMetadataService? metadataService = null)
 {
     private const int BatchSize = 100;
     private readonly IFileSystemEnumerator _fileSystemEnumerator = fileSystemEnumerator ?? new SafeFileSystemEnumerator();
+    private readonly InstallerMetadataService _metadataService = metadataService ?? new InstallerMetadataService();
 
     public async Task<ScanResult> ScanAsync(
         ScanRoot root,
@@ -131,8 +133,13 @@ public sealed class CatalogScanner(
                 var existing = await repository.FindInstallerAsync(root.Id, relativePath, token);
                 var unchanged = existing is not null && existing.Size == info.Length && existing.LastWriteTimeUtc == info.LastWriteTimeUtc;
                 var hash = unchanged ? existing!.Sha256 : await hashCalculator.ComputeSha256Async(info.FullName, token);
+                var reuseMetadata = unchanged && existing!.MetadataStatus is MetadataStatus.Success or MetadataStatus.Partial;
+                var metadata = reuseMetadata ? null : _metadataService.Extract(info.FullName);
                 var now = DateTimeOffset.UtcNow;
-                await writer.WriteAsync(new InstallerFile(existing?.Id ?? 0, root.Id, relativePath, info.Name, info.Extension.ToLowerInvariant(), info.Length, info.LastWriteTimeUtc, hash, existing?.FirstSeenUtc ?? now, now, true), token);
+                var file = new InstallerFile(existing?.Id ?? 0, root.Id, relativePath, info.Name, info.Extension.ToLowerInvariant(), info.Length, info.LastWriteTimeUtc, hash, existing?.FirstSeenUtc ?? now, now, true);
+                file = reuseMetadata ? file with { InstallerKind = existing!.InstallerKind, ProductName = existing.ProductName, ProductVersion = existing.ProductVersion, Publisher = existing.Publisher, FileVersion = existing.FileVersion, FileDescription = existing.FileDescription, Architecture = existing.Architecture, MetadataSource = existing.MetadataSource, MetadataStatus = existing.MetadataStatus, MetadataError = existing.MetadataError, NormalizedVersion = existing.NormalizedVersion, ProductCode = existing.ProductCode, UpgradeCode = existing.UpgradeCode } : file with { InstallerKind = metadata!.Kind, ProductName = metadata.ProductName, ProductVersion = metadata.ProductVersion, Publisher = metadata.Publisher, FileVersion = metadata.FileVersion, FileDescription = metadata.FileDescription, Architecture = metadata.Architecture, MetadataSource = metadata.Source, MetadataStatus = metadata.Status, MetadataError = metadata.Error, NormalizedVersion = VersionNormalizer.Normalize(metadata.ProductVersion), ProductCode = metadata.ProductCode, UpgradeCode = metadata.UpgradeCode };
+                if (!reuseMetadata && file.MetadataStatus == MetadataStatus.Failed) logger?.Error("metadata", $"metadata extraction failed path='{info.FullName}' kind={file.InstallerKind} extractor={file.MetadataSource} error={file.MetadataError}");
+                await writer.WriteAsync(file, token);
                 Interlocked.Increment(ref counters.Processed);
                 reporter.Report();
             }
