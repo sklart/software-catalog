@@ -34,4 +34,10 @@ public sealed class CatalogDatabaseTests : IAsyncLifetime
         await _database.UpsertInstallersAsync([new(0, root.Id, "DUPLICATE.EXE", "DUPLICATE.EXE", ".exe", 2, now, null, now, now, true)], CancellationToken.None);
         Assert.Single(await _database.GetInstallersAsync(CancellationToken.None), file => file.ScanRootId == root.Id);
     }
+    [Fact] public async Task DirectCaseOnlyInsertViolatesUniqueConstraint()
+    {
+        var root = await _database.AddScanRootAsync("C:\\Direct", ScanRootPathKind.Absolute, true, CancellationToken.None); await using var connection = new SqliteConnection($"Data Source={Path.Combine(_folder, "catalog.db")};Pooling=False"); await connection.OpenAsync();
+        await using (var first = connection.CreateCommand()) { first.CommandText = $"INSERT INTO installer_files(scan_root_id,relative_path,file_name,extension,size,last_write_utc,first_seen_utc,last_seen_utc,exists_flag) VALUES({root.Id},'Tool.exe','Tool.exe','.exe',1,'2026','2026','2026',1)"; await first.ExecuteNonQueryAsync(); }
+        await using var second = connection.CreateCommand(); second.CommandText = $"INSERT INTO installer_files(scan_root_id,relative_path,file_name,extension,size,last_write_utc,first_seen_utc,last_seen_utc,exists_flag) VALUES({root.Id},'tool.EXE','tool.EXE','.exe',1,'2026','2026','2026',1)"; await Assert.ThrowsAsync<SqliteException>(() => second.ExecuteNonQueryAsync());
+    }
 }

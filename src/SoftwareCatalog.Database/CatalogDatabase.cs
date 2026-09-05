@@ -4,7 +4,7 @@ using SoftwareCatalog.Core.Domain;
 using SoftwareCatalog.Database.Migrations;
 
 namespace SoftwareCatalog.Database;
-public sealed class CatalogDatabase(string databasePath) : IScanCatalogRepository
+public sealed class CatalogDatabase(string databasePath, IAppLogger? logger = null) : IScanCatalogRepository
 {
     private readonly string _connectionString = new SqliteConnectionStringBuilder { DataSource = databasePath, Mode = SqliteOpenMode.ReadWriteCreate, Cache = SqliteCacheMode.Shared, Pooling = false }.ToString();
     private static readonly IMigration[] Migrations = [new Migration001Initial(), new Migration002CaseInsensitivePaths()];
@@ -16,8 +16,9 @@ public sealed class CatalogDatabase(string databasePath) : IScanCatalogRepositor
         {
             await using var check = connection.CreateCommand(); check.CommandText = "SELECT COUNT(*) FROM schema_migrations WHERE version=$version"; check.Parameters.AddWithValue("$version", migration.Version);
             if (Convert.ToInt32(await check.ExecuteScalarAsync(cancellationToken)) != 0) continue;
-            await using var transaction = await connection.BeginTransactionAsync(cancellationToken); await migration.ApplyAsync(connection, (SqliteTransaction)transaction, cancellationToken);
-            await using var mark = connection.CreateCommand(); mark.Transaction = (SqliteTransaction)transaction; mark.CommandText = "INSERT INTO schema_migrations(version, applied_utc) VALUES($version,$utc)"; mark.Parameters.AddWithValue("$version", migration.Version); mark.Parameters.AddWithValue("$utc", DateTimeOffset.UtcNow.ToString("O")); await mark.ExecuteNonQueryAsync(cancellationToken); await transaction.CommitAsync(cancellationToken);
+            logger?.Information("migration", $"Starting version {migration.Version}.");
+            try { await using var transaction = await connection.BeginTransactionAsync(cancellationToken); await migration.ApplyAsync(connection, (SqliteTransaction)transaction, cancellationToken); await using var mark = connection.CreateCommand(); mark.Transaction = (SqliteTransaction)transaction; mark.CommandText = "INSERT INTO schema_migrations(version, applied_utc) VALUES($version,$utc)"; mark.Parameters.AddWithValue("$version", migration.Version); mark.Parameters.AddWithValue("$utc", DateTimeOffset.UtcNow.ToString("O")); await mark.ExecuteNonQueryAsync(cancellationToken); await transaction.CommitAsync(cancellationToken); logger?.Information("migration", $"Applied version {migration.Version}."); }
+            catch (Exception exception) { logger?.Error("migration", $"Version {migration.Version}: {exception.Message}"); throw; }
         }
     }
     public async Task<IReadOnlyList<ScanRoot>> GetScanRootsAsync(CancellationToken token) { var result = new List<ScanRoot>(); await using var c = await OpenAsync(token); await using var cmd = c.CreateCommand(); cmd.CommandText = "SELECT id,stored_path,path_kind,include_subdirectories,enabled,created_utc,updated_utc FROM scan_roots ORDER BY id"; await using var r = await cmd.ExecuteReaderAsync(token); while (await r.ReadAsync(token)) result.Add(new(r.GetInt64(0), r.GetString(1), (ScanRootPathKind)r.GetInt32(2), r.GetBoolean(3), r.GetBoolean(4), DateTimeOffset.Parse(r.GetString(5)), DateTimeOffset.Parse(r.GetString(6)))); return result; }
