@@ -33,13 +33,16 @@ public sealed class CatalogScanner(
         var output = Channel.CreateBounded<InstallerFile>(new BoundedChannelOptions(256) { FullMode = BoundedChannelFullMode.Wait });
         var reporter = new ProgressReporter(progress, counters, errors);
         var completeTraversal = true;
+        Task? producer = null;
+        Task? workersCompletion = null;
+        Task? writer = null;
 
         try
         {
-            var producer = ProduceAsync(resolvedRoot, root.IncludeSubdirectories, input.Writer, errors, counters, reporter, token, () => completeTraversal = false);
+            producer = ProduceAsync(resolvedRoot, root.IncludeSubdirectories, input.Writer, errors, counters, reporter, token, () => completeTraversal = false);
             var workers = Enumerable.Range(0, options.MaxDegreeOfParallelism).Select(_ => ProcessAsync(input.Reader, output.Writer, root, errors, counters, reporter, token)).ToArray();
-            var writer = WriteAsync(output.Reader, token);
-            var workersCompletion = Task.WhenAll(workers);
+            writer = WriteAsync(output.Reader, token);
+            workersCompletion = Task.WhenAll(workers);
             CancelOnFault(producer, linkedCancellation);
             CancelOnFault(workersCompletion, linkedCancellation);
             CancelOnFault(writer, linkedCancellation);
@@ -70,8 +73,20 @@ public sealed class CatalogScanner(
         }
         finally
         {
+            linkedCancellation.Cancel();
             input.Writer.TryComplete();
             output.Writer.TryComplete();
+            await AwaitCompletionAsync(producer, workersCompletion, writer);
+        }
+    }
+
+    private static async Task AwaitCompletionAsync(params Task?[] tasks)
+    {
+        foreach (var task in tasks.Where(task => task is not null))
+        {
+            try { await task!; }
+            catch (OperationCanceledException) { }
+            catch { }
         }
     }
 
