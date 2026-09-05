@@ -1,11 +1,12 @@
 using System.Text.Json;
 using SoftwareCatalog.Core.Abstractions;
+using SoftwareCatalog.Core.Domain;
 
 namespace SoftwareCatalog.Infrastructure.Settings;
 
-public sealed record AppSettings(int MaxParallelism, string[] SupportedExtensions, int LogRetention, int UpdateCheckCacheHours = 12, int MaxUpdateCheckParallelism = 4)
+public sealed record AppSettings(int MaxParallelism, string[] SupportedExtensions, int LogRetention, int UpdateCheckCacheHours = 12, int MaxUpdateCheckParallelism = 4, int MaxDownloadParallelism = 2, int DownloadTimeoutMinutes = 30, string DownloadDestination = "Downloads", DownloadDestinationKind DownloadDestinationKind = DownloadDestinationKind.RelativeToApplication)
 {
-    public static AppSettings Default { get; } = new(Math.Max(1, Environment.ProcessorCount / 2), [".exe", ".msi", ".msix", ".msixbundle", ".zip", ".7z"], 10, 12, 4);
+    public static AppSettings Default { get; } = new(Math.Max(1, Environment.ProcessorCount / 2), [".exe", ".msi", ".msix", ".msixbundle", ".zip", ".7z"], 10, 12, 4, 2, 30, "Downloads", DownloadDestinationKind.RelativeToApplication);
 }
 public sealed class SettingsService(IAppPathService paths)
 {
