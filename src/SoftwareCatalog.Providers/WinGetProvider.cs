@@ -17,7 +17,8 @@ public sealed class WinGetProvider(IWinGetClient client, ProductNormalizer norma
         if (source is null)
         {
             var candidates = await client.SearchAsync(product.CanonicalName, token);
-            var matches = candidates.Where(candidate => normalizer.Normalize(candidate.Name) == product.NormalizedName && (string.IsNullOrWhiteSpace(product.Publisher) || string.IsNullOrWhiteSpace(candidate.Publisher) || normalizer.Normalize(candidate.Publisher) == normalizer.Normalize(product.Publisher))).ToArray();
+            var enriched = await Task.WhenAll(candidates.Where(candidate => normalizer.Normalize(candidate.Name) == product.NormalizedName).Select(async candidate => await client.ShowAsync(candidate.Id, token) ?? candidate));
+            var matches = enriched.Where(candidate => !string.IsNullOrWhiteSpace(candidate.Name) && normalizer.Normalize(candidate.Name) == product.NormalizedName && (string.IsNullOrWhiteSpace(product.Publisher) || (!string.IsNullOrWhiteSpace(candidate.Publisher) && normalizer.Normalize(candidate.Publisher) == normalizer.Normalize(product.Publisher)))).ToArray();
             if (matches.Length == 0) return new(UpdateStatus.NotFound, Source: Id);
             if (matches.Length != 1) return new(UpdateStatus.Ambiguous, Source: Id, Error: "Multiple plausible WinGet packages");
             var candidate = matches[0];
@@ -37,7 +38,7 @@ public sealed class ProcessWinGetClient : IWinGetClient
         using var process = Process.Start(start) ?? throw new InvalidOperationException("WinGet could not be started");
         var output = await process.StandardOutput.ReadToEndAsync(token); await process.WaitForExitAsync(token);
         if (process.ExitCode != 0) return [];
-        return output.Split('\n').Select(line => line.Split(' ', StringSplitOptions.RemoveEmptyEntries)).Where(parts => parts.Length >= 3 && parts[1].Contains('.')).Select(parts => new WinGetPackage(parts[1], parts[0], null, parts[^1])).ToArray();
+        return WinGetSearchParser.Parse(output);
     }
     public async Task<WinGetPackage?> ShowAsync(string packageId, CancellationToken token)
     {
