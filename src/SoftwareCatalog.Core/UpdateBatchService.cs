@@ -4,7 +4,7 @@ using SoftwareCatalog.Core.Domain;
 namespace SoftwareCatalog.Core;
 
 public sealed record UpdateBatchResult(int Checked, int Updates, int Errors, int Ambiguous);
-public sealed class UpdateBatchService(UpdateDiscoveryService discovery, IAppLogger? logger = null)
+public sealed class UpdateBatchService(IUpdateChecker discovery, IAppLogger? logger = null)
 {
     public async Task<UpdateBatchResult> CheckAsync(IEnumerable<SoftwareProduct> products, bool force, int cacheHours, int maxParallelism, CancellationToken cancellationToken)
     {

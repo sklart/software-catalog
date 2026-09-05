@@ -3,7 +3,9 @@ using SoftwareCatalog.Core.Domain;
 
 namespace SoftwareCatalog.Core;
 
-public sealed class UpdateDiscoveryService(IProductCatalogRepository repository, IEnumerable<IUpdateProvider> providers, VersionComparer comparer, IAppLogger? logger = null)
+public interface IUpdateChecker { Task<UpdateCheckResult> CheckAsync(SoftwareProduct product, bool force, int cacheHours, CancellationToken cancellationToken); }
+
+public sealed class UpdateDiscoveryService(IProductCatalogRepository repository, IEnumerable<IUpdateProvider> providers, VersionComparer comparer, IAppLogger? logger = null) : IUpdateChecker
 {
     public async Task<UpdateCheckResult> CheckAsync(SoftwareProduct product, bool force, int cacheHours, CancellationToken cancellationToken)
     {
