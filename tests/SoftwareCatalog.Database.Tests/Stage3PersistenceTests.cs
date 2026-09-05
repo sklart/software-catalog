@@ -17,14 +17,14 @@ public sealed class Stage3PersistenceTests : IAsyncLifetime
         var stored = Assert.Single(await _database.GetInstallersAsync(CancellationToken.None)); Assert.Equal("Contoso.Sample", stored.MsixIdentityName);
         var product = await _database.UpsertProductAsync(new SoftwareProduct(Guid.NewGuid(), "Sample Application", "Contoso", "sampleapplication", now, now, "1.0", "1.0"), CancellationToken.None);
         await _database.LinkInstallerAsync(stored.Id, product.Id, ProductMatchSource.MsixIdentity, ProductMatchConfidence.High, CancellationToken.None);
-        var linked = Assert.Single(await _database.GetInstallersForProductAsync(product.Id, CancellationToken.None)); Assert.Equal(ProductMatchSource.MsixIdentity, linked.ProductMatchSource); Assert.Equal(ProductMatchConfidence.High, linked.ProductMatchConfidence);
+        var linked = Assert.Single(await _database.GetInstallersForProductAsync(product.Id, CancellationToken.None)); Assert.Equal(product.Id, linked.ProductId); Assert.Equal(ProductMatchSource.MsixIdentity, linked.ProductMatchSource); Assert.Equal(ProductMatchConfidence.High, linked.ProductMatchConfidence);
     }
     [Fact]
     public async Task PersistsAndClearsSourcesAndUpdateState()
     {
         var now = DateTimeOffset.UtcNow; var product = await _database.UpsertProductAsync(new SoftwareProduct(Guid.NewGuid(), "Tool", "Publisher", "tool", now, now), CancellationToken.None);
-        await _database.SetUpdateSourceAsync(new ProductUpdateSource(Guid.NewGuid(), product.Id, "GitHub", "owner/repo", true, true), CancellationToken.None);
-        var source = Assert.Single(await _database.GetUpdateSourcesAsync(product.Id, CancellationToken.None)); Assert.Equal(product.Id, source.ProductId); Assert.Equal("GitHub", source.ProviderType); Assert.Equal("owner/repo", source.ExternalId); Assert.True(source.Enabled); Assert.True(source.IsExplicit);
+        var expectedSource = new ProductUpdateSource(Guid.NewGuid(), product.Id, "GitHub", "owner/repo", true, true); await _database.SetUpdateSourceAsync(expectedSource, CancellationToken.None);
+        var source = Assert.Single(await _database.GetUpdateSourcesAsync(product.Id, CancellationToken.None)); Assert.Equal(expectedSource.Id, source.Id); Assert.Equal(product.Id, source.ProductId); Assert.Equal("GitHub", source.ProviderType); Assert.Equal("owner/repo", source.ExternalId); Assert.True(source.Enabled); Assert.True(source.IsExplicit);
         await _database.SaveUpdateCheckAsync(product.Id, new UpdateCheckResult(UpdateStatus.UpdateAvailable, "2.0", "2.0", Source: "GitHub", ExternalProductId: "owner/repo", Error: "brief", CheckedUtc: now), CancellationToken.None);
         var saved = Assert.Single(await _database.GetProductsAsync(CancellationToken.None)); Assert.Equal(UpdateStatus.UpdateAvailable, saved.UpdateStatus); Assert.Equal("2.0", saved.LatestVersion); Assert.Equal("2.0", saved.LatestNormalizedVersion); Assert.Equal("GitHub", saved.UpdateProvider); Assert.Equal("owner/repo", saved.ExternalProductId); Assert.Equal("brief", saved.UpdateError); Assert.Equal(now, saved.LastCheckedUtc);
         await _database.ClearUpdateSourcesAsync(product.Id, "GitHub", CancellationToken.None); Assert.Empty(await _database.GetUpdateSourcesAsync(product.Id, CancellationToken.None));
