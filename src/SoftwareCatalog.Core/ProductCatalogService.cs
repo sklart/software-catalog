@@ -28,12 +28,13 @@ public sealed class ProductCatalogService(IScanCatalogRepository installers, IPr
             await products.LinkInstallerAsync(file.Id, productId, source, confidence, cancellationToken);
             files[index] = file with { ProductId = productId, ProductMatchSource = source, ProductMatchConfidence = confidence };
         }
-        foreach (var group in files.Where(file => file.Exists && file.ProductId is not null).GroupBy(file => file.ProductId!.Value))
+        foreach (var group in files.Where(file => file.Exists && file.StorageState != InstallerStorageState.Trashed && file.ProductId is not null).GroupBy(file => file.ProductId!.Value))
         {
             if (!productById.TryGetValue(group.Key, out var product)) continue;
             InstallerFile? latest = null;
             foreach (var candidate in group.Where(file => !string.IsNullOrWhiteSpace(file.NormalizedVersion))) if (latest is null || comparer.Compare(latest.NormalizedVersion, candidate.NormalizedVersion) == VersionComparisonResult.Older) latest = candidate;
             if (latest is not null) await products.UpsertProductAsync(product with { LatestLocalVersion = latest.ProductVersion, LatestNormalizedVersion = latest.NormalizedVersion }, cancellationToken);
         }
+        foreach (var product in productById.Values.Where(product => files.Any(file => file.ProductId == product.Id) && !files.Any(file => file.ProductId == product.Id && file.Exists && file.StorageState != InstallerStorageState.Trashed && !string.IsNullOrWhiteSpace(file.NormalizedVersion)))) await products.UpsertProductAsync(product with { LatestLocalVersion = null, LatestNormalizedVersion = null }, cancellationToken);
     }
 }

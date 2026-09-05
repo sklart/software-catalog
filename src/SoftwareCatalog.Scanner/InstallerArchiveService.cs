@@ -1,0 +1,79 @@
+using SoftwareCatalog.Core.Abstractions;
+using SoftwareCatalog.Core.Domain;
+
+namespace SoftwareCatalog.Scanner;
+
+public sealed record ArchiveActionResult(ArchiveOperationStatus Status, ArchiveOperation Operation, string? Error = null);
+
+/// <summary>Serial, local-only storage transitions. The database is changed only after the final file is verified.</summary>
+public sealed class InstallerArchiveService(IScanCatalogRepository repository, IPortablePathResolver paths, IArchiveLocationResolver locations, IFileHashCalculator hashes, IAppLogger? logger = null)
+{
+    private readonly SemaphoreSlim _gate = new(1, 1);
+    public Task<ArchiveActionResult> ArchiveAsync(InstallerFile file, CancellationToken token) => MoveAsync(file, InstallerStorageState.Archived, null, token);
+    public Task<ArchiveActionResult> TrashAsync(InstallerFile file, CancellationToken token) => MoveAsync(file, InstallerStorageState.Trashed, null, token);
+    public Task<ArchiveActionResult> RestoreAsync(InstallerFile file, string? alternateDestination, CancellationToken token) => MoveAsync(file, InstallerStorageState.Active, alternateDestination, token);
+    public async Task<ArchiveActionResult> PurgeAsync(InstallerFile file, CancellationToken token)
+    {
+        if (file.StorageState != InstallerStorageState.Trashed) return await FinishAsync(file, ArchiveOperationType.Purge, null, null, ArchiveOperationStatus.Error, "Постоянное удаление разрешено только из корзины.", token);
+        if (file.IsPinned) return await FinishAsync(file, ArchiveOperationType.Purge, null, null, ArchiveOperationStatus.Error, "Закреплённый файл сначала необходимо открепить.", token);
+        await _gate.WaitAsync(token); try
+        {
+            var source = await ResolvePathAsync(file, token); var op = NewOperation(file, ArchiveOperationType.Purge, source, null, null);
+            await repository.SaveArchiveOperationAsync(op, token);
+            try { File.Delete(source); await repository.MarkInstallerPurgedAsync(file.Id, token); return await CompleteAsync(op, ArchiveOperationStatus.Completed, null, token); }
+            catch (Exception ex) { return await CompleteAsync(op, ArchiveOperationStatus.Error, ex.Message, token); }
+        } finally { _gate.Release(); }
+    }
+    private async Task<ArchiveActionResult> MoveAsync(InstallerFile file, InstallerStorageState state, string? alternateDestination, CancellationToken token)
+    {
+        if (file.IsPinned) return await FinishAsync(file, state == InstallerStorageState.Archived ? ArchiveOperationType.Archive : state == InstallerStorageState.Trashed ? ArchiveOperationType.MoveToTrash : ArchiveOperationType.Restore, null, null, ArchiveOperationStatus.Error, "Закреплённый файл сначала необходимо открепить.", token);
+        if (!file.Exists) return await FinishAsync(file, ArchiveOperationType.Archive, null, null, ArchiveOperationStatus.Error, "Исходный файл не найден в каталоге.", token);
+        await _gate.WaitAsync(token); try
+        {
+            var source = await ResolvePathAsync(file, token); var type = state == InstallerStorageState.Archived ? ArchiveOperationType.Archive : state == InstallerStorageState.Trashed ? ArchiveOperationType.MoveToTrash : file.StorageState == InstallerStorageState.Trashed ? ArchiveOperationType.RestoreFromTrash : ArchiveOperationType.Restore;
+            if (!File.Exists(source)) return await FinishAsync(file, type, source, null, ArchiveOperationStatus.Error, "Исходный файл исчез до выполнения операции.", token);
+            if (IsTransient(source)) return await FinishAsync(file, type, source, null, ArchiveOperationStatus.Error, "Временный или незавершённый файл нельзя перемещать в архив.", token);
+            var destination = await GetDestinationAsync(file, state, alternateDestination, token); var op = NewOperation(file, type, source, destination, file.Sha256);
+            await repository.SaveArchiveOperationAsync(op, token);
+            try
+            {
+                var sourceHash = file.Sha256 ?? await hashes.ComputeSha256Async(source, token);
+                if (File.Exists(destination)) { var existing = await hashes.ComputeSha256Async(destination, token); return await CompleteAsync(op with { Sha256 = sourceHash }, string.Equals(existing, sourceHash, StringComparison.OrdinalIgnoreCase) ? ArchiveOperationStatus.AlreadyExists : ArchiveOperationStatus.Conflict, null, token); }
+                Directory.CreateDirectory(Path.GetDirectoryName(destination)!); var part = destination + ".archive-part";
+                try
+                {
+                    await CopyAsync(source, part, token);
+                    if (new FileInfo(source).Length != new FileInfo(part).Length || !string.Equals(sourceHash, await hashes.ComputeSha256Async(part, token), StringComparison.OrdinalIgnoreCase)) throw new IOException("Проверка SHA-256 после копирования не пройдена.");
+                    File.Move(part, destination, false);
+                    var root = state == InstallerStorageState.Active ? (await repository.GetScanRootsAsync(token)).Single(x => x.Id == file.OriginalScanRootId) : await GetManagedRootAsync(state, token); var relative = Path.GetRelativePath(paths.Resolve(root), destination);
+                    var originalRoot = file.OriginalScanRootId ?? (file.StorageState == InstallerStorageState.Active ? file.ScanRootId : null);
+                    var originalPath = file.OriginalRelativePath ?? (file.StorageState == InstallerStorageState.Active ? file.RelativePath : null);
+                    if (state == InstallerStorageState.Active) { originalRoot = null; originalPath = null; }
+                    await repository.UpdateInstallerStorageAsync(new(file.Id, root.Id, relative, state, sourceHash, originalRoot, originalPath, DateTimeOffset.UtcNow), token);
+                    File.Delete(source);
+                    logger?.Information("archive", $"operation={type} installerId={file.Id} status=completed");
+                    return await CompleteAsync(op with { Sha256 = sourceHash }, ArchiveOperationStatus.Completed, null, token);
+                }
+                finally { if (File.Exists(part)) File.Delete(part); }
+            }
+            catch (OperationCanceledException) { return await CompleteAsync(op, ArchiveOperationStatus.Cancelled, null, CancellationToken.None); }
+            catch (Exception ex) { logger?.Error("archive", $"operation={type} installerId={file.Id} error={ex.Message}"); return await CompleteAsync(op, ArchiveOperationStatus.Error, ex.Message, CancellationToken.None); }
+        } finally { _gate.Release(); }
+    }
+    private static async Task CopyAsync(string source, string destination, CancellationToken token) { await using var input = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, FileOptions.Asynchronous); await using var output = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, FileOptions.Asynchronous); await input.CopyToAsync(output, token); await output.FlushAsync(token); }
+    private async Task<string> ResolvePathAsync(InstallerFile file, CancellationToken token) { var root = (await repository.GetScanRootsAsync(token)).Single(x => x.Id == file.ScanRootId); return Path.GetFullPath(Path.Combine(paths.Resolve(root), file.RelativePath)); }
+    private async Task<ScanRoot> GetManagedRootAsync(InstallerStorageState state, CancellationToken token) => state switch { InstallerStorageState.Archived => await repository.EnsureManagedScanRootAsync(ScanRootRole.Archive, locations.ArchiveStoredPath, locations.PathKind, token), InstallerStorageState.Trashed => await repository.EnsureManagedScanRootAsync(ScanRootRole.Trash, locations.PathKind == ScanRootPathKind.Absolute ? locations.TrashRoot : Path.Combine(locations.ArchiveStoredPath, "Trash"), locations.PathKind, token), _ => throw new InvalidOperationException("Managed root requested for active storage.") };
+    private async Task<string> GetDestinationAsync(InstallerFile file, InstallerStorageState state, string? alternate, CancellationToken token)
+    {
+        if (state == InstallerStorageState.Archived) return Path.Combine(locations.ArchiveRoot, Safe(file.ProductName ?? "unknown") + "-" + (file.ProductId?.ToString("N")[..8] ?? "unlinked"), Safe(file.NormalizedVersion ?? file.ProductVersion ?? "unknown"), Safe(file.FileName));
+        if (state == InstallerStorageState.Trashed) return Path.Combine(locations.TrashRoot, file.Id.ToString(), Safe(file.FileName));
+        if (!string.IsNullOrWhiteSpace(alternate)) return Path.GetFullPath(alternate);
+        if (file.OriginalScanRootId is null || string.IsNullOrWhiteSpace(file.OriginalRelativePath)) throw new InvalidOperationException("Для восстановления требуется выбрать папку назначения.");
+        var root = (await repository.GetScanRootsAsync(token)).Single(x => x.Id == file.OriginalScanRootId); return Path.Combine(paths.Resolve(root), file.OriginalRelativePath);
+    }
+    private static string Safe(string value) { var invalid = Path.GetInvalidFileNameChars(); var cleaned = new string(value.Select(c => invalid.Contains(c) ? '_' : c).ToArray()).Trim(); return string.IsNullOrWhiteSpace(cleaned) ? "unknown" : cleaned[..Math.Min(100, cleaned.Length)]; }
+    private static bool IsTransient(string path) => path.EndsWith(".part", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".archive-part", StringComparison.OrdinalIgnoreCase) || path.Contains($"{Path.DirectorySeparatorChar}Cache{Path.DirectorySeparatorChar}Staging{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase);
+    private static ArchiveOperation NewOperation(InstallerFile file, ArchiveOperationType type, string source, string? destination, string? sha) => new(Guid.NewGuid(),file.Id,file.ProductId,type,file.StorageState,type == ArchiveOperationType.Purge ? null : type is ArchiveOperationType.Archive ? InstallerStorageState.Archived : type == ArchiveOperationType.MoveToTrash ? InstallerStorageState.Trashed : InstallerStorageState.Active,source,destination,sha,ArchiveOperationStatus.Running,null,DateTimeOffset.UtcNow,null);
+    private async Task<ArchiveActionResult> FinishAsync(InstallerFile file, ArchiveOperationType type, string? source, string? destination, ArchiveOperationStatus status, string? error, CancellationToken token) { var op=NewOperation(file,type,source ?? "",destination,file.Sha256) with { Status=status,Error=error,CompletedUtc=DateTimeOffset.UtcNow }; await repository.SaveArchiveOperationAsync(op, token); return new(status,op,error); }
+    private async Task<ArchiveActionResult> CompleteAsync(ArchiveOperation op, ArchiveOperationStatus status, string? error, CancellationToken token) { var done=op with { Status=status,Error=error,CompletedUtc=DateTimeOffset.UtcNow }; await repository.SaveArchiveOperationAsync(done, token); return new(status,done,error); }
+}

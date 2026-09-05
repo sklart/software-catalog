@@ -1,0 +1,45 @@
+using SoftwareCatalog.Core.Domain;
+
+namespace SoftwareCatalog.Core.Tests;
+
+public sealed class InstallerRetentionPlannerTests
+{
+    private readonly InstallerRetentionPlanner _planner = new(new VersionComparer(), new DuplicateInstallerService());
+    [Fact] public void KeepsThreeNewestVersionsAndArchivesOlder()
+    {
+        var plan = _planner.CreatePlan([File(1,"1.0"), File(2,"2.0"), File(3,"3.0"), File(4,"4.0")], 3);
+        Assert.Equal(RetentionAction.Archive, Item(plan, 1).Action);
+        Assert.All([2L,3,4], id => Assert.Equal(RetentionAction.Keep, Item(plan, id).Action));
+    }
+    [Fact] public void OrdersNumericVersionsInsteadOfLexicalVersions()
+    {
+        var plan = _planner.CreatePlan([File(1,"1.9"), File(2,"1.10"), File(3,"2.0")], 2);
+        Assert.Equal(RetentionAction.Archive, Item(plan, 1).Action);
+        Assert.Equal(RetentionAction.Keep, Item(plan, 2).Action);
+    }
+    [Fact] public void KeepsAllArchitecturesOfRetainedVersion()
+    {
+        var plan = _planner.CreatePlan([File(1,"2.0"), File(2,"3.0", architecture:"x86"), File(3,"3.0",architecture:"x64"), File(4,"3.0",architecture:"arm64")], 1);
+        Assert.Equal(RetentionAction.Archive, Item(plan, 1).Action); Assert.All([2L,3,4], id => Assert.Equal(RetentionAction.Keep, Item(plan,id).Action));
+    }
+    [Fact] public void ProtectsPinnedAndUnknownInstallers()
+    {
+        var plan = _planner.CreatePlan([File(1,"1.0", pinned:true), File(2,"2.0"), File(3,null)], 1);
+        Assert.Equal(RetentionAction.Keep, Item(plan,1).Action); Assert.Equal(RetentionAction.ManualReview,Item(plan,3).Action);
+    }
+    [Fact] public void DoesNotReArchiveArchivedInstaller()
+    {
+        var plan = _planner.CreatePlan([File(1,"1.0", state:InstallerStorageState.Archived), File(2,"2.0")], 1);
+        Assert.Equal(RetentionAction.Keep, Item(plan,1).Action);
+    }
+    [Fact] public void ClassifiesDuplicatesWithoutRiskingLastCopy()
+    {
+        var sameProduct = _planner.CreatePlan([File(1,"1.0",sha:"A"), File(2,"1.0",sha:"A")], 1);
+        Assert.Equal(1, sameProduct.Items.Count(x => x.Action == RetentionAction.DuplicateCandidate));
+        var crossProduct = _planner.CreatePlan([File(1,"1.0",sha:"A", product:Guid.NewGuid()), File(2,"1.0",sha:"A", product:Guid.NewGuid())], 1);
+        Assert.All(crossProduct.Items, x => Assert.Equal(RetentionAction.ManualReview,x.Action));
+    }
+    private static RetentionPlanItem Item(RetentionPlan plan, long id) => plan.Items.Single(x => x.Installer.Id == id);
+    private static InstallerFile File(long id, string? version, bool pinned=false, InstallerStorageState state=InstallerStorageState.Active, string? sha=null, Guid? product=null, string? architecture=null)
+    { var now=DateTimeOffset.UtcNow; return new InstallerFile(id,1,$"{id}.exe",$"{id}.exe",".exe",100,now,sha,now,now,true,ProductName:"Tool",ProductVersion:version,NormalizedVersion:version,ProductId:product ?? Guid.Parse("11111111-1111-1111-1111-111111111111"),Architecture:architecture,StorageState:state,IsPinned:pinned); }
+}

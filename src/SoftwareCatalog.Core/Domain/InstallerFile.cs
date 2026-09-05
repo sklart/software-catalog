@@ -3,6 +3,9 @@ namespace SoftwareCatalog.Core.Domain;
 public enum InstallerKind { Unknown, Executable, Msi, Msix, MsixBundle, ZipArchive, SevenZipArchive }
 public enum MetadataSource { None, PeVersionInfo, MsiDatabase, MsixManifest, FileNameFallback }
 public enum MetadataStatus { NotProcessed, Success, Partial, Failed }
+public enum InstallerStorageState { Active, Archived, Trashed }
+public enum ArchiveOperationType { Archive, Restore, MoveToTrash, RestoreFromTrash, Purge }
+public enum ArchiveOperationStatus { Planned, Running, Completed, Cancelled, Error, Conflict, AlreadyExists }
 
 public sealed record InstallerFile(
     long Id,
@@ -33,4 +36,16 @@ public sealed record InstallerFile(
     Guid? ProductId = null,
     ProductMatchSource? ProductMatchSource = null,
     ProductMatchConfidence? ProductMatchConfidence = null,
-    string? MsixIdentityName = null);
+    string? MsixIdentityName = null,
+    InstallerStorageState StorageState = InstallerStorageState.Active,
+    bool IsPinned = false,
+    DateTimeOffset? StorageChangedUtc = null,
+    long? OriginalScanRootId = null,
+    string? OriginalRelativePath = null);
+
+public sealed record ArchiveOperation(Guid Id, long InstallerId, Guid? ProductId, ArchiveOperationType OperationType,
+    InstallerStorageState FromState, InstallerStorageState? ToState, string SourcePath, string? DestinationPath,
+    string? Sha256, ArchiveOperationStatus Status, string? Error, DateTimeOffset StartedUtc, DateTimeOffset? CompletedUtc);
+
+public sealed record InstallerStorageUpdate(long InstallerId, long ScanRootId, string RelativePath, InstallerStorageState StorageState,
+    string? Sha256, long? OriginalScanRootId, string? OriginalRelativePath, DateTimeOffset ChangedUtc);

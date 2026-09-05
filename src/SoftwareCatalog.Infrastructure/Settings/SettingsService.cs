@@ -4,9 +4,9 @@ using SoftwareCatalog.Core.Domain;
 
 namespace SoftwareCatalog.Infrastructure.Settings;
 
-public sealed record AppSettings(int MaxParallelism, string[] SupportedExtensions, int LogRetention, int UpdateCheckCacheHours = 12, int MaxUpdateCheckParallelism = 4, int MaxDownloadParallelism = 2, int DownloadTimeoutMinutes = 30, string DownloadDestination = "Downloads", DownloadDestinationKind DownloadDestinationKind = DownloadDestinationKind.RelativeToApplication)
+public sealed record AppSettings(int MaxParallelism, string[] SupportedExtensions, int LogRetention, int UpdateCheckCacheHours = 12, int MaxUpdateCheckParallelism = 4, int MaxDownloadParallelism = 2, int DownloadTimeoutMinutes = 30, string DownloadDestination = "Downloads", DownloadDestinationKind DownloadDestinationKind = DownloadDestinationKind.RelativeToApplication, int KeepLatestVersions = 3, string ArchiveDestination = "Archive", ArchiveDestinationKind ArchiveDestinationKind = ArchiveDestinationKind.RelativeToApplication)
 {
-    public static AppSettings Default { get; } = new(Math.Max(1, Environment.ProcessorCount / 2), [".exe", ".msi", ".msix", ".msixbundle", ".zip", ".7z"], 10, 12, 4, 2, 30, "Downloads", DownloadDestinationKind.RelativeToApplication);
+    public static AppSettings Default { get; } = new(Math.Max(1, Environment.ProcessorCount / 2), [".exe", ".msi", ".msix", ".msixbundle", ".zip", ".7z"], 10, 12, 4, 2, 30, "Downloads", DownloadDestinationKind.RelativeToApplication, 3, "Archive", ArchiveDestinationKind.RelativeToApplication);
 }
 public sealed class SettingsService(IAppPathService paths)
 {

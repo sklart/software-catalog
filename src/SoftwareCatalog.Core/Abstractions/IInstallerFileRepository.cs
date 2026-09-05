@@ -6,12 +6,26 @@ public interface IScanCatalogRepository
 {
     Task<IReadOnlyList<ScanRoot>> GetScanRootsAsync(CancellationToken cancellationToken);
     Task<ScanRoot> AddScanRootAsync(string storedPath, ScanRootPathKind pathKind, bool includeSubdirectories, CancellationToken cancellationToken);
+    Task<ScanRoot> EnsureManagedScanRootAsync(ScanRootRole role, string storedPath, ScanRootPathKind pathKind, CancellationToken cancellationToken) => throw new NotSupportedException("Managed storage is not supported by this repository.");
     Task UpdateScanRootAsync(long id, string storedPath, ScanRootPathKind pathKind, CancellationToken cancellationToken);
     Task RemoveScanRootAsync(long id, CancellationToken cancellationToken);
     Task<InstallerFile?> FindInstallerAsync(long scanRootId, string relativePath, CancellationToken cancellationToken);
     Task UpsertInstallersAsync(IReadOnlyList<InstallerFile> installers, CancellationToken cancellationToken);
     Task MarkMissingAsync(long scanRootId, DateTimeOffset scanStartedUtc, CancellationToken cancellationToken);
     Task<IReadOnlyList<InstallerFile>> GetInstallersAsync(CancellationToken cancellationToken);
+    Task UpdateInstallerStorageAsync(InstallerStorageUpdate update, CancellationToken cancellationToken) => throw new NotSupportedException("Archive storage is not supported by this repository.");
+    Task SetInstallerPinnedAsync(long installerId, bool isPinned, CancellationToken cancellationToken) => throw new NotSupportedException("Archive storage is not supported by this repository.");
+    Task MarkInstallerPurgedAsync(long installerId, CancellationToken cancellationToken) => throw new NotSupportedException("Archive storage is not supported by this repository.");
+    Task SaveArchiveOperationAsync(ArchiveOperation operation, CancellationToken cancellationToken) => throw new NotSupportedException("Archive storage is not supported by this repository.");
+    Task<IReadOnlyList<ArchiveOperation>> GetArchiveOperationsAsync(long? installerId, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyList<ArchiveOperation>>([]);
+}
+
+public interface IArchiveLocationResolver
+{
+    string ArchiveRoot { get; }
+    string TrashRoot { get; }
+    string ArchiveStoredPath { get; }
+    ScanRootPathKind PathKind { get; }
 }
 
 public interface IProductCatalogRepository

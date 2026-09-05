@@ -1,5 +1,9 @@
 # Software Catalog
 
+## Stage 5: archive and safe cleanup
+
+Stage 5 adds a local installer archive, retention-plan preview, SHA-256 duplicate detection, recoverable Trash, and explicit permanent cleanup. Retention never permanently deletes files automatically: it can only propose moving older installers to the managed archive.
+
 Portable Windows catalog for local software installers. Stages 1–3 provide safe file enumeration, metadata extraction, product grouping and update discovery. Stage 4 adds explicit update download discovery, HTTPS-only streaming into `Cache\Staging`, SHA-256 verification, metadata/product validation and portable download history.
 
 Software Catalog never installs or executes installers. It does not invoke `winget install` or `winget upgrade`; an installer is only downloaded and staged/imported after validation. Successful downloads are added to the local installer catalog.
