@@ -13,5 +13,6 @@
     <Project Path="tests/SoftwareCatalog.Infrastructure.Tests/SoftwareCatalog.Infrastructure.Tests.csproj" />
     <Project Path="tests/SoftwareCatalog.Providers.Tests/SoftwareCatalog.Providers.Tests.csproj" />
     <Project Path="tests/SoftwareCatalog.Scanner.Tests/SoftwareCatalog.Scanner.Tests.csproj" />
+    <Project Path="tests/SoftwareCatalog.UI.Tests/SoftwareCatalog.UI.Tests.csproj" />
   </Folder>
 </Solution>

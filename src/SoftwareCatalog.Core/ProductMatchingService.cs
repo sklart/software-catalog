@@ -4,6 +4,12 @@ namespace SoftwareCatalog.Core;
 
 public sealed class ProductMatchingService(ProductNormalizer normalizer)
 {
+    public bool HasConflictingStableIdentifier(InstallerFile file, IEnumerable<InstallerFile> candidates)
+        => candidates.Any(candidate =>
+            Different(file.UpgradeCode, candidate.UpgradeCode) ||
+            Different(file.ProductCode, candidate.ProductCode) ||
+            Different(file.MsixIdentityName, candidate.MsixIdentityName));
+
     public ProductMatch? FindMatch(InstallerFile file, IEnumerable<InstallerFile> candidates)
     {
         foreach (var candidate in candidates)
@@ -15,5 +21,6 @@ public sealed class ProductMatchingService(ProductNormalizer normalizer)
         }
         return null;
     }
+    private static bool Different(string? left, string? right) => !string.IsNullOrWhiteSpace(left) && !string.IsNullOrWhiteSpace(right) && !left.Equals(right, StringComparison.OrdinalIgnoreCase);
 }
 public sealed record ProductMatch(Guid? ProductId, ProductMatchSource Source, ProductMatchConfidence Confidence);

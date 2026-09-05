@@ -39,6 +39,19 @@ public sealed class DownloadServiceTests : IDisposable
         Assert.Equal(DownloadStatus.Error, result.Status); Assert.Contains("время", result.Error!, StringComparison.OrdinalIgnoreCase); Assert.False(Directory.Exists(Destination) && Directory.EnumerateFiles(Destination).Any());
     }
     [Fact]
+    public async Task VerifiesContentLengthAndExpectedHash()
+    {
+        var bytes = Encoding.UTF8.GetBytes("verified"); var hash = Convert.ToHexString(SHA256.HashData(bytes));
+        var success = await new DownloadService(Client(HttpStatusCode.OK, bytes)).DownloadAsync(Candidate("https://example.test/tool.exe") with { Sha256 = hash }, Staging, Destination, null, TimeSpan.FromSeconds(5), CancellationToken.None); Assert.Equal(DownloadStatus.Completed, success.Status);
+        var mismatch = await new DownloadService(Client(HttpStatusCode.OK, bytes, bytes.Length + 1)).DownloadAsync(Candidate("https://example.test/other.exe"), Staging, Destination, null, TimeSpan.FromSeconds(5), CancellationToken.None); Assert.Equal(DownloadStatus.Error, mismatch.Status); Assert.False(Directory.EnumerateFiles(Staging, "*.part").Any());
+    }
+    [Fact]
+    public async Task UserCancellationAndHttpsRedirectLeaveNoCompletedFile()
+    {
+        using var cancellation = new CancellationTokenSource(); var downloading = new DownloadService(new HttpClient(new DelayedHandler())).DownloadAsync(Candidate("https://example.test/tool.exe"), Staging, Destination, null, TimeSpan.FromSeconds(5), cancellation.Token); cancellation.Cancel(); var cancelled = await downloading; Assert.Equal(DownloadStatus.Cancelled, cancelled.Status); Assert.False(Directory.Exists(Destination) && Directory.EnumerateFiles(Destination).Any());
+        var redirect = await new DownloadService(new HttpClient(new RedirectHandler(new Uri("https://safe.test/tool.exe")))).DownloadAsync(Candidate("https://example.test/tool.exe"), Staging, Destination, null, TimeSpan.FromSeconds(5), CancellationToken.None); Assert.Equal(DownloadStatus.Completed, redirect.Status);
+    }
+    [Fact]
     public void CleansOnlyPartialFilesInOwnStagingDirectory()
     {
         Directory.CreateDirectory(Staging); File.WriteAllText(Path.Combine(Staging, "old.part"), "x"); File.WriteAllText(Path.Combine(Staging, "keep.exe"), "x");
@@ -55,13 +68,15 @@ public sealed class DownloadServiceTests : IDisposable
     [Theory]
     [InlineData("..\\evil.exe", "download.bin")]
     [InlineData("CON.exe", "download.bin")]
+    [InlineData("C:\\evil.exe", "download.bin")]
+    [InlineData("tool<bad>.exe", "tool_bad_.exe")]
     [InlineData("tool. ", "tool")]
     public void SanitizesUnsafeNames(string input, string expected) => Assert.Equal(expected, DownloadService.SanitizeFileName(input));
     private string Staging => Path.Combine(_folder, "staging"); private string Destination => Path.Combine(_folder, "destination");
     private static DownloadCandidate Candidate(string url) => new("Test", "id", "2.0", "2.0", Path.GetFileName(new Uri(url).AbsolutePath), new Uri(url));
-    private static HttpClient Client(HttpStatusCode status, byte[] bytes) => new(new Handler(status, bytes));
+    private static HttpClient Client(HttpStatusCode status, byte[] bytes, long? length = null) => new(new Handler(status, bytes, length));
     public void Dispose() { if (Directory.Exists(_folder)) Directory.Delete(_folder, true); }
-    private sealed class Handler(HttpStatusCode status, byte[] bytes) : HttpMessageHandler { protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token) => Task.FromResult(new HttpResponseMessage(status) { Content = new ByteArrayContent(bytes) }); }
+    private sealed class Handler(HttpStatusCode status, byte[] bytes, long? length = null) : HttpMessageHandler { protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token) { var content = new ByteArrayContent(bytes); if (length is not null) content.Headers.ContentLength = length; return Task.FromResult(new HttpResponseMessage(status) { Content = content }); } }
     private sealed class RedirectHandler(Uri finalUri) : HttpMessageHandler { protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { RequestMessage = new HttpRequestMessage(HttpMethod.Get, finalUri), Content = new ByteArrayContent([1]) }); }
     private sealed class DelayedHandler : HttpMessageHandler { protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token) { await Task.Delay(Timeout.InfiniteTimeSpan, token); return new(HttpStatusCode.OK); } }
 }

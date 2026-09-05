@@ -43,4 +43,18 @@ public sealed class WinGetManifestParserTests
             """;
         var installer = Assert.Single(WinGetManifestParser.Parse(output)); Assert.Equal("https://example.test/tool-x64.msi", installer.InstallerUrl); Assert.Equal("AABBCC", installer.InstallerSha256); Assert.Equal("MSI", installer.InstallerType); Assert.Equal("x64", installer.Architecture); Assert.Equal("machine", installer.Scope); Assert.Equal("en-US", installer.Locale);
     }
+    [Theory]
+    [InlineData("x86")]
+    [InlineData("arm64")]
+    public void ParsesOrdinaryShowOutputForAllArchitectures(string architecture)
+    {
+        var output = $"Installer Url : https://example.test/tool-{architecture}.exe\nInstaller SHA256 : AABB\nInstaller Type : EXE\nArchitecture : {architecture}\nextra line";
+        var installer = Assert.Single(WinGetManifestParser.Parse(output)); Assert.Equal(architecture, installer.Architecture); Assert.Equal("AABB", installer.InstallerSha256); Assert.Equal("EXE", installer.InstallerType);
+    }
+    [Fact]
+    public void KeepsInstallerWithoutHashButNeverCreatesOneWithoutUrl()
+    {
+        var installer = Assert.Single(WinGetManifestParser.Parse("Installer Url: https://example.test/tool.exe\nInstaller Type: EXE")); Assert.Null(installer.InstallerSha256);
+        Assert.Empty(WinGetManifestParser.Parse("Installer SHA256: AABB\nArchitecture: x64"));
+    }
 }

@@ -34,15 +34,21 @@ public sealed class GitHubReleasesProvider(HttpClient client, ProductNormalizer 
     public async Task<DownloadCandidateResolution> ResolveAsync(SoftwareProduct product, ProductUpdateSource source, UpdateCheckResult? update, CancellationToken token)
     {
         if (!IsRepository(source.ExternalId)) return new(DownloadCandidateStatus.NotFound, [], "GitHub repository is not configured");
-        using var response = await client.GetAsync($"repos/{source.ExternalId}/releases/latest", token);
+        HttpResponseMessage response;
+        try { response = await client.GetAsync($"repos/{source.ExternalId}/releases/latest", token); }
+        catch (OperationCanceledException) when (!token.IsCancellationRequested) { return new(DownloadCandidateStatus.Error, [], "GitHub request timed out"); }
+        catch (HttpRequestException ex) { return new(DownloadCandidateStatus.Error, [], ex.Message); }
+        using (response)
+        {
         if (response.StatusCode == HttpStatusCode.NotFound) return new(DownloadCandidateStatus.NotFound, []);
         if (!response.IsSuccessStatusCode) return new(DownloadCandidateStatus.Error, [], $"GitHub returned {(int)response.StatusCode}");
         Release? release;
-        try { release = await response.Content.ReadFromJsonAsync<Release>(cancellationToken: token); } catch (System.Text.Json.JsonException) { return new(DownloadCandidateStatus.Error, [], "Malformed GitHub release response"); }
+        try { release = await response.Content.ReadFromJsonAsync<Release>(cancellationToken: token); } catch (OperationCanceledException) when (!token.IsCancellationRequested) { return new(DownloadCandidateStatus.Error, [], "GitHub request timed out"); } catch (System.Text.Json.JsonException) { return new(DownloadCandidateStatus.Error, [], "Malformed GitHub release response"); }
         if (release is null) return new(DownloadCandidateStatus.Error, [], "Malformed GitHub release response");
         var candidates = (release.assets ?? []).Where(IsInstaller).Select(a => Uri.TryCreate(a.browser_download_url, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps ? new DownloadCandidate(Id, source.ExternalId, release.tag_name, normalizer.NormalizeVersion(release.tag_name), a.name, uri, a.content_type, a.size, Architecture(a.name), Path.GetExtension(a.name ?? string.Empty).TrimStart('.'), null, null, release.name, release.published_at) : null).Where(x => x is not null).Cast<DownloadCandidate>().ToArray();
         if (candidates.Length == 0) return new(DownloadCandidateStatus.NotFound, []);
         return candidates.Length == 1 ? new(DownloadCandidateStatus.Available, candidates) : new(DownloadCandidateStatus.Ambiguous, candidates, "Несколько подходящих installer-файлов.");
+        }
     }
     private static bool IsInstaller(Asset asset) { var name = asset.name ?? ""; var ext = Path.GetExtension(name); return new[] { ".exe", ".msi", ".msix", ".msixbundle", ".zip", ".7z" }.Contains(ext, StringComparer.OrdinalIgnoreCase) && !new[] { "source", "checksum", "sha256", "signature", "symbols", "debug", "portable" }.Any(x => name.Contains(x, StringComparison.OrdinalIgnoreCase)); }
     private static string? Architecture(string? name) => name?.Contains("arm64", StringComparison.OrdinalIgnoreCase) == true ? "arm64" : name?.Contains("x64", StringComparison.OrdinalIgnoreCase) == true || name?.Contains("amd64", StringComparison.OrdinalIgnoreCase) == true ? "x64" : name?.Contains("x86", StringComparison.OrdinalIgnoreCase) == true ? "x86" : null;
