@@ -19,9 +19,20 @@ public sealed class UpdateBatchServiceTests
         var checker = new DelayedChecker(); var now = DateTimeOffset.UtcNow; var products = Enumerable.Range(0, 3).Select(index => new SoftwareProduct(Guid.NewGuid(), $"Tool {index}", null, $"tool{index}", now, now)).ToArray();
         await new UpdateBatchService(checker).CheckAsync(products, true, 12, 0, CancellationToken.None); Assert.Equal(1, checker.Peak);
     }
+    [Fact]
+    public async Task PropagatesCancellationAndDoesNotStartQueuedChecks()
+    {
+        var checker = new BlockingChecker(); var now = DateTimeOffset.UtcNow; var products = Enumerable.Range(0, 5).Select(i => new SoftwareProduct(Guid.NewGuid(), $"P{i}", null, $"p{i}", now, now)).ToArray(); using var cancel = new CancellationTokenSource();
+        var task = new UpdateBatchService(checker).CheckAsync(products, true, 12, 2, cancel.Token); await checker.Started.Task.WaitAsync(TimeSpan.FromSeconds(2)); cancel.Cancel(); await Assert.ThrowsAnyAsync<OperationCanceledException>(() => task); Assert.InRange(checker.Calls, 1, 2); Assert.True(checker.Cancelled);
+    }
     private sealed class DelayedChecker : IUpdateChecker
     {
         private int _current; public int Calls; public int Peak;
         public async Task<UpdateCheckResult> CheckAsync(SoftwareProduct product, bool force, int cacheHours, CancellationToken token) { Interlocked.Increment(ref Calls); var current = Interlocked.Increment(ref _current); while (true) { var old = Peak; if (old >= current || Interlocked.CompareExchange(ref Peak, current, old) == old) break; } await Task.Delay(25, token); Interlocked.Decrement(ref _current); return new(UpdateStatus.UpdateAvailable); }
+    }
+    private sealed class BlockingChecker : IUpdateChecker
+    {
+        public int Calls; public bool Cancelled; public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public async Task<UpdateCheckResult> CheckAsync(SoftwareProduct product, bool force, int cacheHours, CancellationToken token) { Interlocked.Increment(ref Calls); Started.TrySetResult(); try { await Task.Delay(Timeout.InfiniteTimeSpan, token); return new(UpdateStatus.UpToDate); } catch (OperationCanceledException) { Cancelled = true; throw; } }
     }
 }

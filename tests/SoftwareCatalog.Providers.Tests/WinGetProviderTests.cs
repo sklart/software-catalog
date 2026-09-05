@@ -1,0 +1,15 @@
+using SoftwareCatalog.Core;
+using SoftwareCatalog.Core.Domain;
+using SoftwareCatalog.Providers;
+
+namespace SoftwareCatalog.Providers.Tests;
+
+public sealed class WinGetProviderTests
+{
+    [Fact] public async Task DiscoversOneEnrichedPublisherMatch() { var client = new Client { Search = [new("Vendor.Tool", "Tool", null, "0")] }; client.Shown["Vendor.Tool"] = new("Vendor.Tool", "Tool", "Vendor", "2.0"); var result = await Provider(client).CheckLatestAsync(Product(), null, CancellationToken.None); Assert.Equal(UpdateStatus.Unknown, result.Status); Assert.Equal("2.0", result.LatestVersion); Assert.Equal("Vendor.Tool", result.ExternalProductId); Assert.Equal(1, client.ShowCalls); }
+    [Fact] public async Task RejectsPublisherMismatchAndAmbiguity() { var mismatch = new Client { Search = [new("Other.Tool", "Tool", "Other", "2.0")] }; mismatch.Shown["Other.Tool"] = mismatch.Search[0]; Assert.Equal(UpdateStatus.NotFound, (await Provider(mismatch).CheckLatestAsync(Product(), null, CancellationToken.None)).Status); var ambiguous = new Client { Search = [new("Vendor.One", "Tool", "Vendor", "2.0"), new("Vendor.Two", "Tool", "Vendor", "2.0")] }; ambiguous.Shown["Vendor.One"] = ambiguous.Search[0]; ambiguous.Shown["Vendor.Two"] = ambiguous.Search[1]; Assert.Equal(UpdateStatus.Ambiguous, (await Provider(ambiguous).CheckLatestAsync(Product(), null, CancellationToken.None)).Status); }
+    [Fact] public async Task UsesExplicitBindingWithoutSearch() { var client = new Client(); client.Shown["Vendor.Tool"] = new("Vendor.Tool", "Tool", "Vendor", "2.0"); var result = await Provider(client).CheckLatestAsync(Product(), new(Guid.NewGuid(), Guid.NewGuid(), "WinGet", "Vendor.Tool", true, true), CancellationToken.None); Assert.Equal("Vendor.Tool", result.ExternalProductId); Assert.Equal(0, client.SearchCalls); }
+    [Fact] public async Task MapsNotFoundAndCancellation() { var client = new Client(); Assert.Equal(UpdateStatus.NotFound, (await Provider(client).CheckLatestAsync(Product(), null, CancellationToken.None)).Status); client.Cancel = true; await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Provider(client).CheckLatestAsync(Product(), null, new CancellationToken(true))); }
+    private static WinGetProvider Provider(Client client) => new(client, new ProductNormalizer()); private static SoftwareProduct Product() { var now = DateTimeOffset.UtcNow; return new(Guid.NewGuid(), "Tool", "Vendor", "tool", now, now); }
+    private sealed class Client : IWinGetClient { public IReadOnlyList<WinGetPackage> Search { get; set; } = []; public Dictionary<string, WinGetPackage> Shown { get; } = []; public int SearchCalls; public int ShowCalls; public bool Cancel; public Task<IReadOnlyList<WinGetPackage>> SearchAsync(string n, CancellationToken t) { SearchCalls++; if (Cancel) return Task.FromCanceled<IReadOnlyList<WinGetPackage>>(t); return Task.FromResult(Search); } public Task<WinGetPackage?> ShowAsync(string id, CancellationToken t) { ShowCalls++; if (Cancel) return Task.FromCanceled<WinGetPackage?>(t); return Task.FromResult(Shown.TryGetValue(id, out var package) ? package : null); } }
+}
