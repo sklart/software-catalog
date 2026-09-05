@@ -8,7 +8,7 @@ namespace SoftwareCatalog.UI.Converters;
 
 public sealed class ScanRootAvailabilityConverter : IValueConverter
 {
-    public static IPortablePathResolver? Resolver { get; set; }
+    public IPortablePathResolver? Resolver { get; set; }
     public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
     {
         if (value is not ScanRoot root) return string.Empty;
