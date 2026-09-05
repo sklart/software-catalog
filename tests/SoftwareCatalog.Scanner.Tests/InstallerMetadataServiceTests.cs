@@ -23,6 +23,9 @@ public sealed class InstallerMetadataServiceTests
     [InlineData("release candidate", null)]
     public void NormalizesConservativeVersions(string raw, string? expected) => Assert.Equal(expected, VersionNormalizer.Normalize(raw));
 
+    [Fact]
+    public void NormalizesNullToNull() => Assert.Null(VersionNormalizer.Normalize(null));
+
     [Theory]
     [InlineData("1.2", "1.2")]
     [InlineData("1.2.3.4", "1.2.3.4")]
@@ -89,7 +92,7 @@ public sealed class InstallerMetadataServiceTests
     public async Task MalformedExecutableReturnsFailureInsteadOfThrowing()
     {
         var path = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.exe");
-        try { await File.WriteAllTextAsync(path, "not-a-pe"); var result = new PeMetadataExtractor().Extract(path, InstallerKind.Executable); Assert.Equal(MetadataStatus.Failed, result.Status); }
+        try { await File.WriteAllTextAsync(path, "not-a-pe"); var result = new PeMetadataExtractor().Extract(path, InstallerKind.Executable); Assert.Equal(MetadataStatus.Failed, result.Status); Assert.False(string.IsNullOrWhiteSpace(result.Error)); }
         finally { File.Delete(path); }
     }
 
@@ -98,7 +101,7 @@ public sealed class InstallerMetadataServiceTests
     {
         var path = typeof(InstallerMetadataService).Assembly.Location;
         var result = new PeMetadataExtractor().Extract(path, InstallerKind.Executable);
-        Assert.Equal(MetadataStatus.Success, result.Status); Assert.False(string.IsNullOrWhiteSpace(result.FileVersion)); Assert.False(string.IsNullOrWhiteSpace(result.FileDescription)); Assert.False(string.IsNullOrWhiteSpace(result.ProductName));
+        Assert.Equal(MetadataStatus.Success, result.Status); Assert.False(string.IsNullOrWhiteSpace(result.ProductName)); Assert.False(string.IsNullOrWhiteSpace(result.ProductVersion)); Assert.False(string.IsNullOrWhiteSpace(result.Publisher)); Assert.False(string.IsNullOrWhiteSpace(result.FileVersion)); Assert.False(string.IsNullOrWhiteSpace(result.FileDescription));
     }
 
     [Theory]
@@ -125,7 +128,7 @@ public sealed class InstallerMetadataServiceTests
             using (var writer = new StreamWriter(archive.CreateEntry("AppxMetadata/AppxBundleManifest.xml").Open()))
                 await writer.WriteAsync("<Bundle xmlns='http://schemas.microsoft.com/appx/2013/bundle'><Identity Name='Sample.Bundle' Version='2.0.0.0' Publisher='CN=Sample'/><Packages><Package FileName='x86.msix' Architecture='x86'/><Package FileName='x64.msix' Architecture='x64'/><Package FileName='arm64.msix' Architecture='ARM64'/></Packages></Bundle>");
             var result = new MsixMetadataExtractor().Extract(path, InstallerKind.MsixBundle);
-            Assert.Equal(MetadataStatus.Success, result.Status); Assert.Equal("Sample.Bundle", result.ProductName); Assert.Equal("2.0.0.0", result.ProductVersion); Assert.Equal("CN=Sample", result.Publisher); Assert.Equal("x86,x64,ARM64", result.Architecture);
+            Assert.Equal(MetadataStatus.Success, result.Status); Assert.Equal("Sample.Bundle", result.ProductName); Assert.Equal("2.0.0.0", result.ProductVersion); Assert.Equal("CN=Sample", result.Publisher); Assert.Equal("x86,x64,ARM64", result.Architecture); Assert.Equal("arm64.msix,x64.msix,x86.msix", result.PackageList);
         }
         finally { File.Delete(path); }
     }

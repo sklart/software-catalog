@@ -28,4 +28,5 @@ public sealed record InstallerFile(
     string? MetadataError = null,
     string? NormalizedVersion = null,
     string? ProductCode = null,
-    string? UpgradeCode = null);
+    string? UpgradeCode = null,
+    string? PackageList = null);

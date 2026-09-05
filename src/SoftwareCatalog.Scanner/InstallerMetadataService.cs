@@ -17,7 +17,7 @@ public sealed record InstallerMetadata(
     InstallerKind Kind, string? ProductName = null, string? ProductVersion = null, string? Publisher = null,
     string? FileVersion = null, string? FileDescription = null, string? Architecture = null,
     MetadataSource Source = MetadataSource.None, MetadataStatus Status = MetadataStatus.NotProcessed,
-    string? Error = null, string? ProductCode = null, string? UpgradeCode = null);
+    string? Error = null, string? ProductCode = null, string? UpgradeCode = null, string? PackageList = null);
 
 public sealed class InstallerMetadataService(IEnumerable<IInstallerMetadataExtractor>? extractors = null)
 {
@@ -124,7 +124,8 @@ public sealed class MsixMetadataExtractor : IInstallerMetadataExtractor
             var architecture = kind == InstallerKind.MsixBundle
                 ? BundleArchitectures(document)
                 : (string?)identity.Attribute("ProcessorArchitecture");
-            return new(kind, display ?? (string?)identity.Attribute("Name"), (string?)identity.Attribute("Version"), publisherDisplay ?? (string?)identity.Attribute("Publisher"), Architecture: architecture, Source: MetadataSource.MsixManifest, Status: MetadataStatus.Success);
+            var packageList = kind == InstallerKind.MsixBundle ? BundlePackages(document) : null;
+            return new(kind, display ?? (string?)identity.Attribute("Name"), (string?)identity.Attribute("Version"), publisherDisplay ?? (string?)identity.Attribute("Publisher"), Architecture: architecture, Source: MetadataSource.MsixManifest, Status: MetadataStatus.Success, PackageList: packageList);
         }
         catch (Exception exception) when (exception is InvalidDataException or IOException or UnauthorizedAccessException or System.Xml.XmlException)
         { return new(kind, Source: MetadataSource.MsixManifest, Status: MetadataStatus.Failed, Error: PeMetadataExtractor.ShortError(exception)); }
@@ -136,6 +137,13 @@ public sealed class MsixMetadataExtractor : IInstallerMetadataExtractor
             .Where(value => !string.IsNullOrWhiteSpace(value)).Select(value => value!).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var ordered = new[] { "x86", "x64", "ARM", "ARM64" }.Where(value => found.Contains(value));
         return string.Join(',', ordered);
+    }
+    private static string? BundlePackages(XDocument document)
+    {
+        var packages = document.Descendants().Where(node => node.Name.LocalName == "Package")
+            .Select(node => (string?)node.Attribute("FileName")).Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value!).OrderBy(value => value, StringComparer.OrdinalIgnoreCase).ToArray();
+        return packages.Length == 0 ? null : string.Join(',', packages);
     }
 }
 
