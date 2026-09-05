@@ -54,7 +54,7 @@ public sealed class PeMetadataExtractor : IInstallerMetadataExtractor
             return new(kind, Source: MetadataSource.PeVersionInfo, Status: MetadataStatus.Failed, Error: ShortError(exception));
         }
     }
-    private static string? ReadArchitecture(string path)
+    public static string ReadArchitecture(string path)
     {
         using var stream = File.OpenRead(path);
         using var reader = new BinaryReader(stream);
@@ -93,7 +93,7 @@ public sealed class MsiMetadataExtractor : IInstallerMetadataExtractor
     {
         var sql = $"SELECT `Value` FROM `Property` WHERE `Property`='{property}'";
         if (MsiDatabaseOpenView(database, sql, out var view) != 0) return null;
-        try { if (MsiViewExecute(view, IntPtr.Zero) != 0 || MsiViewFetch(view, out var record) != 0) return null; try { var size = 0; MsiRecordGetString(record, 1, null, ref size); var value = new System.Text.StringBuilder(size + 1); return MsiRecordGetString(record, 1, value, ref size) == 0 ? value.ToString() : null; } finally { MsiCloseHandle(record); } }
+        try { if (MsiViewExecute(view, IntPtr.Zero) != 0 || MsiViewFetch(view, out var record) != 0) return null; try { var size = 1024; var value = new System.Text.StringBuilder(size + 1); var result = MsiRecordGetString(record, 1, value, ref size); if (result == 234) { value = new System.Text.StringBuilder(size + 1); result = MsiRecordGetString(record, 1, value, ref size); } return result == 0 ? value.ToString() : null; } finally { MsiCloseHandle(record); } }
         finally { MsiCloseHandle(view); }
     }
     [DllImport("msi.dll", CharSet = CharSet.Unicode)] private static extern uint MsiOpenDatabase(string path, IntPtr persist, out IntPtr database);
@@ -121,10 +121,21 @@ public sealed class MsixMetadataExtractor : IInstallerMetadataExtractor
             var properties = document.Descendants().FirstOrDefault(node => node.Name.LocalName == "Properties");
             var display = properties?.Elements().FirstOrDefault(node => node.Name.LocalName == "DisplayName")?.Value;
             var publisherDisplay = properties?.Elements().FirstOrDefault(node => node.Name.LocalName == "PublisherDisplayName")?.Value;
-            return new(kind, display ?? (string?)identity.Attribute("Name"), (string?)identity.Attribute("Version"), publisherDisplay ?? (string?)identity.Attribute("Publisher"), Architecture: (string?)identity.Attribute("ProcessorArchitecture"), Source: MetadataSource.MsixManifest, Status: MetadataStatus.Success);
+            var architecture = kind == InstallerKind.MsixBundle
+                ? BundleArchitectures(document)
+                : (string?)identity.Attribute("ProcessorArchitecture");
+            return new(kind, display ?? (string?)identity.Attribute("Name"), (string?)identity.Attribute("Version"), publisherDisplay ?? (string?)identity.Attribute("Publisher"), Architecture: architecture, Source: MetadataSource.MsixManifest, Status: MetadataStatus.Success);
         }
         catch (Exception exception) when (exception is InvalidDataException or IOException or UnauthorizedAccessException or System.Xml.XmlException)
         { return new(kind, Source: MetadataSource.MsixManifest, Status: MetadataStatus.Failed, Error: PeMetadataExtractor.ShortError(exception)); }
+    }
+    private static string? BundleArchitectures(XDocument document)
+    {
+        var found = document.Descendants().Where(node => node.Name.LocalName == "Package")
+            .Select(node => (string?)node.Attribute("Architecture") ?? (string?)node.Attribute("ProcessorArchitecture"))
+            .Where(value => !string.IsNullOrWhiteSpace(value)).Select(value => value!).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var ordered = new[] { "x86", "x64", "ARM", "ARM64" }.Where(value => found.Contains(value));
+        return string.Join(',', ordered);
     }
 }
 
