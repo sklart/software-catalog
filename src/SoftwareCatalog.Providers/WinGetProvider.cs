@@ -61,8 +61,8 @@ public sealed class ProcessWinGetClient : IWinGetClient
     }
     public async Task<IReadOnlyList<WinGetInstaller>> GetInstallersAsync(string packageId, CancellationToken token)
     {
-        // `show --manifest` is read-only and prints the selected installer manifest; it never invokes installation.
-        var start = new ProcessStartInfo("winget", $"show --id {packageId} --exact --manifest --accept-source-agreements") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+        // Ordinary `show` is a documented read-only command supported by installed WinGet clients.
+        var start = new ProcessStartInfo("winget", $"show --id {packageId} --exact --accept-source-agreements") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
         using var process = Process.Start(start) ?? throw new InvalidOperationException("WinGet could not be started");
         var output = await process.StandardOutput.ReadToEndAsync(token); await process.WaitForExitAsync(token);
         return process.ExitCode == 0 ? WinGetManifestParser.Parse(output) : [];
@@ -75,7 +75,7 @@ public static class WinGetManifestParser
     {
         var result = new List<WinGetInstaller>(); var values = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
         void Flush() { if (values.TryGetValue("InstallerUrl", out var url) && !string.IsNullOrWhiteSpace(url)) { values.TryGetValue("InstallerSha256", out var hash); values.TryGetValue("Architecture", out var architecture); values.TryGetValue("InstallerType", out var type); values.TryGetValue("Scope", out var scope); values.TryGetValue("InstallerLocale", out var locale); result.Add(new(url, hash, architecture, type, scope, locale)); } values.Clear(); }
-        foreach (var raw in text.Split('\n')) { var line = raw.Trim(); if (line.StartsWith("-", StringComparison.Ordinal) && values.Count > 0) Flush(); var separator = line.IndexOf(':'); if (separator <= 0) continue; var key = line[..separator].TrimStart('-', ' ').Trim(); if (key is "InstallerUrl" or "InstallerSha256" or "Architecture" or "InstallerType" or "Scope" or "InstallerLocale") values[key] = line[(separator + 1)..].Trim(); }
+        foreach (var raw in text.Split('\n')) { var line = raw.Trim(); if (line.Length == 0) continue; if (line.StartsWith("-", StringComparison.Ordinal) && values.ContainsKey("InstallerUrl")) Flush(); var separator = line.IndexOf(':'); if (separator <= 0) continue; var label = line[..separator].TrimStart('-', ' ').Trim().Replace(" ", string.Empty, StringComparison.OrdinalIgnoreCase); var key = label.ToLowerInvariant() switch { "installerurl" => "InstallerUrl", "installersha256" => "InstallerSha256", "architecture" => "Architecture", "installertype" => "InstallerType", "scope" => "Scope", "installerlocale" => "InstallerLocale", _ => null }; if (key == "InstallerUrl" && values.ContainsKey("InstallerUrl")) Flush(); if (key is not null) values[key] = line[(separator + 1)..].Trim(); }
         Flush(); return result;
     }
 }

@@ -10,7 +10,7 @@ public sealed class DownloadCoordinator
     public async Task<T> RunAsync<T>(Func<CancellationToken, Task<T>> operation, CancellationToken cancellationToken)
     {
         await _gate.WaitAsync(cancellationToken);
-        try { return await operation(cancellationToken); }
+        try { cancellationToken.ThrowIfCancellationRequested(); return await operation(cancellationToken); }
         finally { _gate.Release(); }
     }
 }
