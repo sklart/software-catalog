@@ -9,7 +9,8 @@ public sealed class CatalogScanner(
     IScanCatalogRepository repository,
     IPortablePathResolver paths,
     IFileHashCalculator hashCalculator,
-    CatalogScannerOptions options)
+    CatalogScannerOptions options,
+    IAppLogger? logger = null)
 {
     private const int BatchSize = 100;
 
@@ -22,6 +23,7 @@ public sealed class CatalogScanner(
         var errors = new ConcurrentQueue<ScanError>();
         var counters = new ScanCounters();
         var resolvedRoot = paths.Resolve(root);
+        logger?.Information("scan", $"Starting root '{resolvedRoot}'.");
         if (!Directory.Exists(resolvedRoot))
         {
             return new ScanResult(0, 0, [new ScanError(resolvedRoot, "Scan root does not exist.")], false);
@@ -58,17 +60,20 @@ public sealed class CatalogScanner(
             }
 
             reporter.Report(force: true);
+            logger?.Information("scan", $"Completed root '{resolvedRoot}'.");
             return new ScanResult(counters.Discovered, counters.Processed, errors.ToArray(), completeTraversal && errors.IsEmpty);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             linkedCancellation.Cancel();
+            logger?.Information("scan", $"Cancelled root '{resolvedRoot}'.");
             return new ScanResult(counters.Discovered, counters.Processed, errors.ToArray(), false);
         }
         catch (Exception exception)
         {
             linkedCancellation.Cancel();
             errors.Enqueue(new ScanError(resolvedRoot, exception.Message));
+            logger?.Error("scan", exception.Message);
             return new ScanResult(counters.Discovered, counters.Processed, errors.ToArray(), false);
         }
         finally
