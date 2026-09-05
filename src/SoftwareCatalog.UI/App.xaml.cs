@@ -7,6 +7,7 @@ using SoftwareCatalog.Infrastructure.Settings;
 using SoftwareCatalog.Infrastructure.Logging;
 using SoftwareCatalog.Scanner;
 using SoftwareCatalog.UI.ViewModels;
+using SoftwareCatalog.UI.Converters;
 
 namespace SoftwareCatalog.UI;
 public partial class App : Application
@@ -20,7 +21,7 @@ public partial class App : Application
         var services = new ServiceCollection();
         services.AddSingleton<IAppPathService, PortableAppPathService>(); services.AddSingleton<IWritableDirectoryProbe, WritableDirectoryProbe>(); services.AddSingleton<IPortablePathResolver, PortablePathResolver>();
         services.AddSingleton<SettingsService>(); services.AddSingleton(sp => new PortableLogger(sp.GetRequiredService<IAppPathService>(), settings.LogRetention)); services.AddSingleton<IAppLogger>(sp => sp.GetRequiredService<PortableLogger>()); services.AddSingleton(sp => new CatalogDatabase(sp.GetRequiredService<IAppPathService>().DatabasePath, sp.GetRequiredService<IAppLogger>())); services.AddSingleton<IScanCatalogRepository>(sp => sp.GetRequiredService<CatalogDatabase>()); services.AddSingleton<IFileHashCalculator, FileHashCalculator>(); services.AddSingleton(new CatalogScannerOptions { MaxDegreeOfParallelism = settings.MaxParallelism, SupportedExtensions = new HashSet<string>(settings.SupportedExtensions, StringComparer.OrdinalIgnoreCase) }); services.AddSingleton<CatalogScanner>(); services.AddSingleton<MainViewModel>(); services.AddSingleton<MainWindow>(); _services = services.BuildServiceProvider();
-        var paths = _services.GetRequiredService<IAppPathService>(); var probe = _services.GetRequiredService<IWritableDirectoryProbe>();
+        ScanRootAvailabilityConverter.Resolver = _services.GetRequiredService<IPortablePathResolver>(); var paths = _services.GetRequiredService<IAppPathService>(); var probe = _services.GetRequiredService<IWritableDirectoryProbe>();
         if (!probe.CanWrite(paths.ApplicationRoot, out _)) { MessageBox.Show("Portable-каталог приложения недоступен для записи.\n\nПереместите Software Catalog в папку, доступную для записи, например D:\\Portable\\SoftwareCatalog.", "Software Catalog", MessageBoxButton.OK, MessageBoxImage.Error); Shutdown(); return; }
         paths.EnsureDirectories(); _services.GetRequiredService<PortableLogger>().Information("startup", "Application startup"); await _services.GetRequiredService<CatalogDatabase>().InitializeAsync(CancellationToken.None); var window = _services.GetRequiredService<MainWindow>(); window.DataContext = _services.GetRequiredService<MainViewModel>(); window.Show();
     }
