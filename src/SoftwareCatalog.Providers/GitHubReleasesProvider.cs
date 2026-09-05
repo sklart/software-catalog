@@ -42,11 +42,7 @@ public sealed class GitHubReleasesProvider(HttpClient client, ProductNormalizer 
         if (release is null) return new(DownloadCandidateStatus.Error, [], "Malformed GitHub release response");
         var candidates = (release.assets ?? []).Where(IsInstaller).Select(a => Uri.TryCreate(a.browser_download_url, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps ? new DownloadCandidate(Id, source.ExternalId, release.tag_name, normalizer.NormalizeVersion(release.tag_name), a.name, uri, a.content_type, a.size, Architecture(a.name), Path.GetExtension(a.name ?? string.Empty).TrimStart('.'), null, null, release.name, release.published_at) : null).Where(x => x is not null).Cast<DownloadCandidate>().ToArray();
         if (candidates.Length == 0) return new(DownloadCandidateStatus.NotFound, []);
-        var arch = Environment.Is64BitOperatingSystem ? "x64" : "x86";
-        var compatible = candidates.Where(c => c.Architecture is null or "neutral" || c.Architecture.Equals(arch, StringComparison.OrdinalIgnoreCase)).ToArray();
-        if (compatible.Length == 0) return new(DownloadCandidateStatus.Unsupported, [], "Нет совместимого installer.");
-        var preferred = compatible.Where(c => c.Architecture?.Equals(arch, StringComparison.OrdinalIgnoreCase) == true).ToArray(); if (preferred.Length > 0) compatible = preferred;
-        return compatible.Length == 1 ? new(DownloadCandidateStatus.Available, compatible) : new(DownloadCandidateStatus.Ambiguous, compatible, "Несколько подходящих installer-файлов.");
+        return candidates.Length == 1 ? new(DownloadCandidateStatus.Available, candidates) : new(DownloadCandidateStatus.Ambiguous, candidates, "Несколько подходящих installer-файлов.");
     }
     private static bool IsInstaller(Asset asset) { var name = asset.name ?? ""; var ext = Path.GetExtension(name); return new[] { ".exe", ".msi", ".msix", ".msixbundle", ".zip", ".7z" }.Contains(ext, StringComparer.OrdinalIgnoreCase) && !new[] { "source", "checksum", "sha256", "signature", "symbols", "debug", "portable" }.Any(x => name.Contains(x, StringComparison.OrdinalIgnoreCase)); }
     private static string? Architecture(string? name) => name?.Contains("arm64", StringComparison.OrdinalIgnoreCase) == true ? "arm64" : name?.Contains("x64", StringComparison.OrdinalIgnoreCase) == true || name?.Contains("amd64", StringComparison.OrdinalIgnoreCase) == true ? "x64" : name?.Contains("x86", StringComparison.OrdinalIgnoreCase) == true ? "x86" : null;

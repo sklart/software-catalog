@@ -36,8 +36,7 @@ public sealed class WinGetProvider(IWinGetClient client, ProductNormalizer norma
         var all = await client.GetInstallersAsync(source.ExternalId, token);
         var candidates = all.Where(x => Uri.TryCreate(x.InstallerUrl, UriKind.Absolute, out var u) && u.Scheme == Uri.UriSchemeHttps).Select(x => { var uri = new Uri(x.InstallerUrl!); return new DownloadCandidate(Id, source.ExternalId, update?.LatestVersion ?? package.Version, normalizer.NormalizeVersion(update?.LatestVersion ?? package.Version), Path.GetFileName(uri.AbsolutePath), uri, null, null, x.Architecture, x.InstallerType, x.InstallerSha256, x.InstallerSha256 is null ? null : "WinGet manifest"); }).ToArray();
         if (candidates.Length == 0) return new(DownloadCandidateStatus.NotFound, [], "WinGet manifest has no HTTPS installer URL.");
-        var arch = Environment.Is64BitOperatingSystem ? "x64" : "x86"; var compatible = candidates.Where(c => string.IsNullOrWhiteSpace(c.Architecture) || c.Architecture.Equals("neutral", StringComparison.OrdinalIgnoreCase) || c.Architecture.Equals(arch, StringComparison.OrdinalIgnoreCase)).ToArray(); var exact = compatible.Where(c => c.Architecture?.Equals(arch, StringComparison.OrdinalIgnoreCase) == true).ToArray(); if (exact.Length > 0) compatible = exact;
-        return compatible.Length switch { 0 => new(DownloadCandidateStatus.Unsupported, [], "Нет совместимой архитектуры."), 1 => new(DownloadCandidateStatus.Available, compatible), _ => new(DownloadCandidateStatus.Ambiguous, compatible, "Несколько подходящих installer-файлов.") };
+        return candidates.Length == 1 ? new(DownloadCandidateStatus.Available, candidates) : new(DownloadCandidateStatus.Ambiguous, candidates, "Несколько подходящих installer-файлов.");
     }
 }
 public sealed class ProcessWinGetClient : IWinGetClient
@@ -59,5 +58,24 @@ public sealed class ProcessWinGetClient : IWinGetClient
         string? name = null, version = null, publisher = null;
         foreach (var line in output.Split('\n')) { var item = line.Trim(); if (item.StartsWith("Name:", StringComparison.OrdinalIgnoreCase)) name = item[5..].Trim(); if (item.StartsWith("Version:", StringComparison.OrdinalIgnoreCase)) version = item[8..].Trim(); if (item.StartsWith("Publisher:", StringComparison.OrdinalIgnoreCase)) publisher = item[10..].Trim(); }
         return name is not null && version is not null ? new(packageId, name, publisher, version) : null;
+    }
+    public async Task<IReadOnlyList<WinGetInstaller>> GetInstallersAsync(string packageId, CancellationToken token)
+    {
+        // `show --manifest` is read-only and prints the selected installer manifest; it never invokes installation.
+        var start = new ProcessStartInfo("winget", $"show --id {packageId} --exact --manifest --accept-source-agreements") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+        using var process = Process.Start(start) ?? throw new InvalidOperationException("WinGet could not be started");
+        var output = await process.StandardOutput.ReadToEndAsync(token); await process.WaitForExitAsync(token);
+        return process.ExitCode == 0 ? WinGetManifestParser.Parse(output) : [];
+    }
+}
+
+public static class WinGetManifestParser
+{
+    public static IReadOnlyList<WinGetInstaller> Parse(string text)
+    {
+        var result = new List<WinGetInstaller>(); var values = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        void Flush() { if (values.TryGetValue("InstallerUrl", out var url) && !string.IsNullOrWhiteSpace(url)) { values.TryGetValue("InstallerSha256", out var hash); values.TryGetValue("Architecture", out var architecture); values.TryGetValue("InstallerType", out var type); values.TryGetValue("Scope", out var scope); values.TryGetValue("InstallerLocale", out var locale); result.Add(new(url, hash, architecture, type, scope, locale)); } values.Clear(); }
+        foreach (var raw in text.Split('\n')) { var line = raw.Trim(); if (line.StartsWith("-", StringComparison.Ordinal) && values.Count > 0) Flush(); var separator = line.IndexOf(':'); if (separator <= 0) continue; var key = line[..separator].TrimStart('-', ' ').Trim(); if (key is "InstallerUrl" or "InstallerSha256" or "Architecture" or "InstallerType" or "Scope" or "InstallerLocale") values[key] = line[(separator + 1)..].Trim(); }
+        Flush(); return result;
     }
 }
