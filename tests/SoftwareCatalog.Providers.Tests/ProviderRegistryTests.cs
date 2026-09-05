@@ -12,6 +12,7 @@ public sealed class ProviderRegistryTests
     private sealed class FakeProvider : IUpdateProvider
     {
         public string Id => "Test";
-        public Task<UpdateResult> CheckAsync(SoftwareProduct product, CancellationToken cancellationToken) => Task.FromResult(new UpdateResult(null, "Unknown"));
+        public bool CanHandle(SoftwareProduct product, ProductUpdateSource? source) => true;
+        public Task<UpdateCheckResult> CheckLatestAsync(SoftwareProduct product, ProductUpdateSource? source, CancellationToken cancellationToken) => Task.FromResult(new UpdateCheckResult(UpdateStatus.Unknown));
     }
 }

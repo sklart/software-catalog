@@ -3,9 +3,9 @@ using SoftwareCatalog.Core.Abstractions;
 
 namespace SoftwareCatalog.Infrastructure.Settings;
 
-public sealed record AppSettings(int MaxParallelism, string[] SupportedExtensions, int LogRetention)
+public sealed record AppSettings(int MaxParallelism, string[] SupportedExtensions, int LogRetention, int UpdateCheckCacheHours = 12, int MaxUpdateCheckParallelism = 4)
 {
-    public static AppSettings Default { get; } = new(Math.Max(1, Environment.ProcessorCount / 2), [".exe", ".msi", ".msix", ".msixbundle", ".zip", ".7z"], 10);
+    public static AppSettings Default { get; } = new(Math.Max(1, Environment.ProcessorCount / 2), [".exe", ".msi", ".msix", ".msixbundle", ".zip", ".7z"], 10, 12, 4);
 }
 public sealed class SettingsService(IAppPathService paths)
 {

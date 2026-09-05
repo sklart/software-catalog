@@ -29,4 +29,8 @@ public sealed record InstallerFile(
     string? NormalizedVersion = null,
     string? ProductCode = null,
     string? UpgradeCode = null,
-    string? PackageList = null);
+    string? PackageList = null,
+    Guid? ProductId = null,
+    ProductMatchSource? ProductMatchSource = null,
+    ProductMatchConfidence? ProductMatchConfidence = null,
+    string? MsixIdentityName = null);
