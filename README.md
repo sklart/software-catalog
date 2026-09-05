@@ -2,7 +2,7 @@
 
 Portable Windows catalog for local software installers. Stages 1–3 provide safe file enumeration, metadata extraction, product grouping and update discovery. Stage 4 adds explicit update download discovery, HTTPS-only streaming into `Cache\Staging`, SHA-256 verification, metadata/product validation and portable download history.
 
-Software Catalog never executes installers. It does not invoke `winget install` or `winget upgrade`; an installer is only downloaded and staged/imported after validation.
+Software Catalog never installs or executes installers. It does not invoke `winget install` or `winget upgrade`; an installer is only downloaded and staged/imported after validation. Successful downloads are added to the local installer catalog.
 
 Requires .NET 10 SDK for development. Run `dotnet build`, `dotnet test`, or `./tools/publish-portable.ps1`. The published application stores persistent data only beside the executable: `Data`, `Config`, `Logs`, `Cache`, and `Backups`.
 
