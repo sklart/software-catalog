@@ -10,9 +10,11 @@ public sealed class CatalogScanner(
     IPortablePathResolver paths,
     IFileHashCalculator hashCalculator,
     CatalogScannerOptions options,
-    IAppLogger? logger = null)
+    IAppLogger? logger = null,
+    IFileSystemEnumerator? fileSystemEnumerator = null)
 {
     private const int BatchSize = 100;
+    private readonly IFileSystemEnumerator _fileSystemEnumerator = fileSystemEnumerator ?? new SafeFileSystemEnumerator();
 
     public async Task<ScanResult> ScanAsync(
         ScanRoot root,
@@ -108,7 +110,7 @@ public sealed class CatalogScanner(
     {
         await Task.Run(async () =>
         {
-            foreach (var file in EnumerateFiles(root, recurse, errors, token, markPartial))
+            foreach (var file in _fileSystemEnumerator.EnumerateFiles(root, recurse, errors, token, markPartial))
             {
                 if (!options.SupportedExtensions.Contains(Path.GetExtension(file))) continue;
                 await writer.WriteAsync(file, token);
@@ -157,7 +159,11 @@ public sealed class CatalogScanner(
         if (batch.Count > 0) await repository.UpsertInstallersAsync(batch, token);
     }
 
-    private static IEnumerable<string> EnumerateFiles(string root, bool recurse, ConcurrentQueue<ScanError> errors, CancellationToken token, Action markPartial)
+}
+
+public sealed class SafeFileSystemEnumerator : IFileSystemEnumerator
+{
+    public IEnumerable<string> EnumerateFiles(string root, bool recurse, ConcurrentQueue<ScanError> errors, CancellationToken token, Action markPartial)
     {
         var directories = new Stack<string>();
         directories.Push(root);
