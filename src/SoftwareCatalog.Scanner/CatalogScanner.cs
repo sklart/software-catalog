@@ -39,9 +39,13 @@ public sealed class CatalogScanner(
             var producer = ProduceAsync(resolvedRoot, root.IncludeSubdirectories, input.Writer, errors, counters, reporter, token, () => completeTraversal = false);
             var workers = Enumerable.Range(0, options.MaxDegreeOfParallelism).Select(_ => ProcessAsync(input.Reader, output.Writer, root, errors, counters, reporter, token)).ToArray();
             var writer = WriteAsync(output.Reader, token);
+            var workersCompletion = Task.WhenAll(workers);
+            CancelOnFault(producer, linkedCancellation);
+            CancelOnFault(workersCompletion, linkedCancellation);
+            CancelOnFault(writer, linkedCancellation);
             await producer;
             input.Writer.TryComplete();
-            await Task.WhenAll(workers);
+            await workersCompletion;
             output.Writer.TryComplete();
             await writer;
 
@@ -69,6 +73,15 @@ public sealed class CatalogScanner(
             input.Writer.TryComplete();
             output.Writer.TryComplete();
         }
+    }
+
+    private static void CancelOnFault(Task task, CancellationTokenSource cancellation)
+    {
+        _ = task.ContinueWith(
+            _ => cancellation.Cancel(),
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
     }
 
     private async Task ProduceAsync(string root, bool recurse, ChannelWriter<string> writer, ConcurrentQueue<ScanError> errors, ScanCounters counters, ProgressReporter reporter, CancellationToken token, Action markPartial)
