@@ -9,7 +9,7 @@ using SoftwareCatalog.Scanner;
 namespace SoftwareCatalog.UI;
 
 /// <summary>Owns the download/import transaction; UI only supplies a candidate and observes progress.</summary>
-public sealed class UpdateDownloadWorkflowService(DownloadService downloader, DownloadCoordinator coordinator, IDownloadHistoryRepository history, IProductCatalogRepository products, IScanCatalogRepository scans, CatalogScanner scanner, ProductCatalogService catalog, IAppPathService appPaths, AppSettings settings, ProductMatchingService matching, IAppLogger? logger = null)
+public sealed class UpdateDownloadWorkflowService(DownloadService downloader, DownloadCoordinator coordinator, IDownloadHistoryRepository history, IProductCatalogRepository products, IScanCatalogRepository scans, CatalogScanner scanner, ProductCatalogService catalog, IAppPathService appPaths, AppSettings settings, ProductMatchingService matching, IAppLogger? logger = null, InstallerMetadataService? metadataService = null)
 {
     public async Task<DownloadWorkflowResult> ExecuteAsync(SoftwareProduct product, DownloadCandidate candidate, IProgress<DownloadProgress>? progress, CancellationToken token)
         => await coordinator.RunAsync(inner => ExecuteCoreAsync(product, candidate, progress, inner), token);
@@ -41,7 +41,7 @@ public sealed class UpdateDownloadWorkflowService(DownloadService downloader, Do
     }
     private async Task<DownloadStatus> ValidateAsync(SoftwareProduct product, string stagedPath, CancellationToken token)
     {
-        token.ThrowIfCancellationRequested(); var metadata = new InstallerMetadataService().Extract(stagedPath);
+        token.ThrowIfCancellationRequested(); var metadata = (metadataService ?? new InstallerMetadataService()).Extract(stagedPath);
         if (metadata.Status != MetadataStatus.Success || string.IsNullOrWhiteSpace(metadata.ProductName) || string.IsNullOrWhiteSpace(metadata.ProductVersion)) { logger?.Information("download", "Manual confirmation required: metadata incomplete."); return DownloadStatus.ManualConfirmationRequired; }
         var now = DateTimeOffset.UtcNow; var probe = new InstallerFile(0, 0, Path.GetFileName(stagedPath), Path.GetFileName(stagedPath), Path.GetExtension(stagedPath), new FileInfo(stagedPath).Length, now, null, now, now, true, metadata.Kind, metadata.ProductName, metadata.ProductVersion, metadata.Publisher, metadata.FileVersion, metadata.FileDescription, metadata.Architecture, metadata.Source, metadata.Status, metadata.Error, VersionNormalizer.Normalize(metadata.ProductVersion), metadata.ProductCode, metadata.UpgradeCode, metadata.PackageList, MsixIdentityName: metadata.MsixIdentityName);
         var known = await products.GetInstallersForProductAsync(product.Id, token); if (matching.HasConflictingStableIdentifier(probe, known)) { logger?.Error("download", "Validation failed: stable identifier mismatch."); return DownloadStatus.ValidationFailed; } var match = matching.FindMatch(probe, known);

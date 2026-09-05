@@ -38,6 +38,14 @@ public sealed class DownloadServiceTests : IDisposable
         var result = await new DownloadService(new HttpClient(new DelayedHandler())).DownloadAsync(Candidate("https://example.test/tool.exe"), Staging, Destination, null, TimeSpan.FromMilliseconds(30), CancellationToken.None);
         Assert.Equal(DownloadStatus.Error, result.Status); Assert.Contains("время", result.Error!, StringComparison.OrdinalIgnoreCase); Assert.False(Directory.Exists(Destination) && Directory.EnumerateFiles(Destination).Any());
     }
+    [Theory]
+    [InlineData(HttpStatusCode.NotFound)]
+    [InlineData(HttpStatusCode.InternalServerError)]
+    public async Task HttpFailuresLeaveNoCompletedOrPartialFile(HttpStatusCode status)
+    {
+        var result = await new DownloadService(Client(status, [1])).DownloadAsync(Candidate("https://example.test/tool.exe"), Staging, Destination, null, TimeSpan.FromSeconds(5), CancellationToken.None);
+        Assert.Equal(DownloadStatus.Error, result.Status); Assert.False(Directory.Exists(Destination) && Directory.EnumerateFiles(Destination).Any()); Assert.False(Directory.Exists(Staging) && Directory.EnumerateFiles(Staging, "*.part").Any());
+    }
     [Fact]
     public async Task VerifiesContentLengthAndExpectedHash()
     {
