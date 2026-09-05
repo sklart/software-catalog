@@ -1,5 +1,6 @@
 using SoftwareCatalog.Core.Domain;
 using SoftwareCatalog.Infrastructure.Paths;
+using SoftwareCatalog.Infrastructure.Settings;
 
 namespace SoftwareCatalog.Infrastructure.Tests;
 public sealed class PortablePathResolverTests
@@ -23,5 +24,11 @@ public sealed class PortablePathResolverTests
     {
         var basePath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")); var app = Path.Combine(basePath, "App"); var absolute = Path.Combine(basePath, "Absolute"); var relative = Path.Combine(basePath, "Relative"); Directory.CreateDirectory(app); Directory.CreateDirectory(absolute); Directory.CreateDirectory(relative);
         try { var resolver = new PortablePathResolver(new PortableAppPathService(app)); Assert.Equal(ScanRootAvailability.Available, resolver.GetAvailability(new ScanRoot(1, absolute, ScanRootPathKind.Absolute, true, true, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow))); Assert.Equal(ScanRootAvailability.PathMissing, resolver.GetAvailability(new ScanRoot(2, Path.Combine(basePath, "Missing"), ScanRootPathKind.Absolute, true, true, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow))); Assert.Equal(ScanRootAvailability.Available, resolver.GetAvailability(new ScanRoot(3, "..\\Relative", ScanRootPathKind.RelativeToApplication, true, true, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow))); Assert.Equal(ScanRootAvailability.PathMissing, resolver.GetAvailability(new ScanRoot(4, "..\\Missing", ScanRootPathKind.RelativeToApplication, true, true, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow))); } finally { Directory.Delete(basePath, true); }
+    }
+    [Fact]
+    public void RelativeDownloadDestinationMovesWithApplication()
+    {
+        var a = Path.Combine(Path.GetTempPath(), "DriveA", "SoftwareCatalog"); var b = Path.Combine(Path.GetTempPath(), "DriveB", "SoftwareCatalog"); var settings = AppSettings.Default with { DownloadDestination = "Downloads", DownloadDestinationKind = DownloadDestinationKind.RelativeToApplication };
+        Assert.Equal(Path.Combine(a, "Downloads"), DownloadDestinationResolver.Resolve(settings, new PortableAppPathService(a))); Assert.Equal(Path.Combine(b, "Downloads"), DownloadDestinationResolver.Resolve(settings, new PortableAppPathService(b)));
     }
 }

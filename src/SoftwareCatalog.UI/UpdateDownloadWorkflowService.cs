@@ -3,6 +3,7 @@ using SoftwareCatalog.Core;
 using SoftwareCatalog.Core.Abstractions;
 using SoftwareCatalog.Core.Domain;
 using SoftwareCatalog.Infrastructure.Settings;
+using SoftwareCatalog.Infrastructure.Paths;
 using SoftwareCatalog.Scanner;
 
 namespace SoftwareCatalog.UI;
@@ -17,7 +18,7 @@ public sealed class UpdateDownloadWorkflowService(DownloadService downloader, Do
         var started = DateTimeOffset.UtcNow; DownloadResult result;
         try
         {
-            var destination = settings.DownloadDestinationKind == DownloadDestinationKind.Absolute ? settings.DownloadDestination : Path.Combine(appPaths.ApplicationRoot, settings.DownloadDestination);
+            var destination = DownloadDestinationResolver.Resolve(settings, appPaths);
             result = await downloader.DownloadAsync(candidate, Path.Combine(appPaths.CacheDirectory, "Staging"), destination, progress, TimeSpan.FromMinutes(settings.DownloadTimeoutMinutes), token);
             if (result.Status == DownloadStatus.Completed && result.FinalPath is not null && result.Sha256 is not null)
             {
@@ -32,7 +33,7 @@ public sealed class UpdateDownloadWorkflowService(DownloadService downloader, Do
     public async Task<DownloadResult> ConfirmManualImportAsync(SoftwareProduct product, DownloadCandidate candidate, DownloadResult staged, CancellationToken token)
     {
         if (staged.Status != DownloadStatus.ManualConfirmationRequired || staged.FinalPath is null || staged.Sha256 is null) return staged;
-        var destination = settings.DownloadDestinationKind == DownloadDestinationKind.Absolute ? settings.DownloadDestination : Path.Combine(appPaths.ApplicationRoot, settings.DownloadDestination);
+        var destination = DownloadDestinationResolver.Resolve(settings, appPaths);
         var result = await ImportAsync(candidate, staged, destination, token);
         await history.SaveDownloadHistoryAsync(new(Guid.NewGuid(), product.Id, candidate.Provider, candidate.ExternalProductId, candidate.Version, candidate.FileName, candidate.Uri?.ToString(), candidate.Sha256, result.Sha256, result.Status, result.Error, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, result.FinalPath is null ? null : Path.GetRelativePath(appPaths.ApplicationRoot, result.FinalPath)), CancellationToken.None);
         return result;
