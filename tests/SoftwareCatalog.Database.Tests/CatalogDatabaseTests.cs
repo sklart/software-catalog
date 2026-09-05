@@ -2,6 +2,7 @@ using SoftwareCatalog.Core.Domain;
 using SoftwareCatalog.Database;
 using Microsoft.Data.Sqlite;
 using SoftwareCatalog.Database.Migrations;
+using SoftwareCatalog.Infrastructure.Paths;
 
 namespace SoftwareCatalog.Database.Tests;
 public sealed class CatalogDatabaseTests : IAsyncLifetime
@@ -67,7 +68,7 @@ public sealed class CatalogDatabaseTests : IAsyncLifetime
     }
     [Fact] public async Task UpdatingRootPreservesIdentityAndSettings()
     {
-        var old = await _database.AddScanRootAsync("C:\\Old", ScanRootPathKind.Absolute, false, CancellationToken.None); await Task.Delay(5); await _database.UpdateScanRootAsync(old.Id, "C:\\New", old.PathKind, CancellationToken.None); var updated = Assert.Single(await _database.GetScanRootsAsync(CancellationToken.None)); Assert.Equal(old.Id, updated.Id); Assert.Equal(old.PathKind, updated.PathKind); Assert.Equal(old.IncludeSubdirectories, updated.IncludeSubdirectories); Assert.Equal(old.Enabled, updated.Enabled); Assert.Equal("C:\\New", updated.StoredPath); Assert.True(updated.UpdatedUtc > old.UpdatedUtc);
+        var oldPath = Path.Combine(_folder, "Old"); var newPath = Path.Combine(_folder, "New"); Directory.CreateDirectory(oldPath); Directory.CreateDirectory(newPath); var old = await _database.AddScanRootAsync(oldPath, ScanRootPathKind.Absolute, false, CancellationToken.None); await Task.Delay(5); await _database.UpdateScanRootAsync(old.Id, newPath, old.PathKind, CancellationToken.None); var updated = Assert.Single(await _database.GetScanRootsAsync(CancellationToken.None)); Assert.Equal(old.Id, updated.Id); Assert.Equal(old.PathKind, updated.PathKind); Assert.Equal(old.IncludeSubdirectories, updated.IncludeSubdirectories); Assert.Equal(old.Enabled, updated.Enabled); Assert.Equal(newPath, updated.StoredPath); Assert.True(updated.UpdatedUtc > old.UpdatedUtc); Assert.Equal(ScanRootAvailability.Available, new PortablePathResolver(new PortableAppPathService(_folder)).GetAvailability(updated));
     }
     private sealed class SuccessfulMigration : IMigration { public int Version => 98; public async Task ApplyAsync(SqliteConnection connection, SqliteTransaction transaction, CancellationToken cancellationToken) { await using var command = connection.CreateCommand(); command.Transaction = transaction; command.CommandText = "CREATE TABLE successful_probe(id INTEGER); INSERT INTO successful_probe VALUES(1);"; await command.ExecuteNonQueryAsync(cancellationToken); } }
     private sealed class FailingMigration : IMigration { public int Version => 99; public async Task ApplyAsync(SqliteConnection connection, SqliteTransaction transaction, CancellationToken cancellationToken) { await using var command = connection.CreateCommand(); command.Transaction = transaction; command.CommandText = "CREATE TABLE rollback_probe(id INTEGER);"; await command.ExecuteNonQueryAsync(cancellationToken); throw new InvalidOperationException("intentional migration failure"); } }

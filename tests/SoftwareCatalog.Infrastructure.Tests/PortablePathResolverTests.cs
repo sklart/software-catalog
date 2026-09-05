@@ -13,6 +13,12 @@ public sealed class PortablePathResolverTests
         Assert.Equal(Path.Combine(Path.GetTempPath(), "DriveB", "Software"), new PortablePathResolver(new PortableAppPathService(rootB)).Resolve(scanRoot));
     }
     [Fact]
+    public void RelativeRootRemainsAvailableAfterPortableHierarchyMove()
+    {
+        var temp = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")); var rootA = Path.Combine(temp, "DriveA", "SoftwareCatalog"); var rootB = Path.Combine(temp, "DriveB", "SoftwareCatalog"); Directory.CreateDirectory(rootA); Directory.CreateDirectory(rootB); Directory.CreateDirectory(Path.Combine(temp, "DriveA", "Software")); Directory.CreateDirectory(Path.Combine(temp, "DriveB", "Software"));
+        try { var root = new ScanRoot(1, "..\\Software", ScanRootPathKind.RelativeToApplication, true, true, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow); Assert.Equal(ScanRootAvailability.Available, new PortablePathResolver(new PortableAppPathService(rootA)).GetAvailability(root)); Assert.Equal(ScanRootAvailability.Available, new PortablePathResolver(new PortableAppPathService(rootB)).GetAvailability(root)); } finally { Directory.Delete(temp, true); }
+    }
+    [Fact]
     public void AvailabilityUsesResolverForAbsoluteAndRelativeRoots()
     {
         var basePath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")); var app = Path.Combine(basePath, "App"); var absolute = Path.Combine(basePath, "Absolute"); var relative = Path.Combine(basePath, "Relative"); Directory.CreateDirectory(app); Directory.CreateDirectory(absolute); Directory.CreateDirectory(relative);
