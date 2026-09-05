@@ -6,15 +6,23 @@ using SoftwareCatalog.Core.Domain;
 
 namespace SoftwareCatalog.Providers;
 
-public interface IWinGetClient { Task<WinGetPackage?> ShowAsync(string packageId, CancellationToken cancellationToken); }
+public interface IWinGetClient { Task<WinGetPackage?> ShowAsync(string packageId, CancellationToken cancellationToken); Task<IReadOnlyList<WinGetPackage>> SearchAsync(string name, CancellationToken cancellationToken); }
 public sealed record WinGetPackage(string Id, string Name, string? Publisher, string Version);
 public sealed class WinGetProvider(IWinGetClient client, ProductNormalizer normalizer) : IUpdateProvider
 {
     public string Id => "WinGet";
-    public bool CanHandle(SoftwareProduct product, ProductUpdateSource? source) => source?.Enabled == true && source.ProviderType.Equals(Id, StringComparison.OrdinalIgnoreCase);
+    public bool CanHandle(SoftwareProduct product, ProductUpdateSource? source) => source is null || (source.Enabled && source.ProviderType.Equals(Id, StringComparison.OrdinalIgnoreCase));
     public async Task<UpdateCheckResult> CheckLatestAsync(SoftwareProduct product, ProductUpdateSource? source, CancellationToken token)
     {
-        if (source is null) return new(UpdateStatus.NotFound);
+        if (source is null)
+        {
+            var candidates = await client.SearchAsync(product.CanonicalName, token);
+            var matches = candidates.Where(candidate => normalizer.Normalize(candidate.Name) == product.NormalizedName && (string.IsNullOrWhiteSpace(product.Publisher) || string.IsNullOrWhiteSpace(candidate.Publisher) || normalizer.Normalize(candidate.Publisher) == normalizer.Normalize(product.Publisher))).ToArray();
+            if (matches.Length == 0) return new(UpdateStatus.NotFound, Source: Id);
+            if (matches.Length != 1) return new(UpdateStatus.Ambiguous, Source: Id, Error: "Multiple plausible WinGet packages");
+            var candidate = matches[0];
+            return new(UpdateStatus.Unknown, candidate.Version, normalizer.NormalizeVersion(candidate.Version), candidate.Name, null, null, Id, candidate.Id);
+        }
         var package = await client.ShowAsync(source.ExternalId, token);
         if (package is null) return new(UpdateStatus.NotFound, Source: Id, ExternalProductId: source.ExternalId);
         if (normalizer.Normalize(package.Name) != product.NormalizedName || (!string.IsNullOrWhiteSpace(product.Publisher) && !string.IsNullOrWhiteSpace(package.Publisher) && normalizer.Normalize(product.Publisher) != normalizer.Normalize(package.Publisher))) return new(UpdateStatus.Ambiguous, Source: Id, ExternalProductId: source.ExternalId, Error: "WinGet package does not conclusively match product");
@@ -23,6 +31,14 @@ public sealed class WinGetProvider(IWinGetClient client, ProductNormalizer norma
 }
 public sealed class ProcessWinGetClient : IWinGetClient
 {
+    public async Task<IReadOnlyList<WinGetPackage>> SearchAsync(string name, CancellationToken token)
+    {
+        var start = new ProcessStartInfo("winget", $"search --name \"{name.Replace("\"", string.Empty)}\" --accept-source-agreements") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+        using var process = Process.Start(start) ?? throw new InvalidOperationException("WinGet could not be started");
+        var output = await process.StandardOutput.ReadToEndAsync(token); await process.WaitForExitAsync(token);
+        if (process.ExitCode != 0) return [];
+        return output.Split('\n').Select(line => line.Split(' ', StringSplitOptions.RemoveEmptyEntries)).Where(parts => parts.Length >= 3 && parts[1].Contains('.')).Select(parts => new WinGetPackage(parts[1], parts[0], null, parts[^1])).ToArray();
+    }
     public async Task<WinGetPackage?> ShowAsync(string packageId, CancellationToken token)
     {
         var start = new ProcessStartInfo("winget", $"show --id {packageId} --exact --accept-source-agreements") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };

@@ -17,7 +17,7 @@ public sealed record InstallerMetadata(
     InstallerKind Kind, string? ProductName = null, string? ProductVersion = null, string? Publisher = null,
     string? FileVersion = null, string? FileDescription = null, string? Architecture = null,
     MetadataSource Source = MetadataSource.None, MetadataStatus Status = MetadataStatus.NotProcessed,
-    string? Error = null, string? ProductCode = null, string? UpgradeCode = null, string? PackageList = null);
+    string? Error = null, string? ProductCode = null, string? UpgradeCode = null, string? PackageList = null, string? MsixIdentityName = null);
 
 public sealed class InstallerMetadataService(IEnumerable<IInstallerMetadataExtractor>? extractors = null)
 {
@@ -125,7 +125,7 @@ public sealed class MsixMetadataExtractor : IInstallerMetadataExtractor
                 ? BundleArchitectures(document)
                 : (string?)identity.Attribute("ProcessorArchitecture");
             var packageList = kind == InstallerKind.MsixBundle ? BundlePackages(document) : null;
-            return new(kind, display ?? (string?)identity.Attribute("Name"), (string?)identity.Attribute("Version"), publisherDisplay ?? (string?)identity.Attribute("Publisher"), Architecture: architecture, Source: MetadataSource.MsixManifest, Status: MetadataStatus.Success, PackageList: packageList);
+            return new(kind, display ?? (string?)identity.Attribute("Name"), (string?)identity.Attribute("Version"), publisherDisplay ?? (string?)identity.Attribute("Publisher"), Architecture: architecture, Source: MetadataSource.MsixManifest, Status: MetadataStatus.Success, PackageList: packageList, MsixIdentityName: (string?)identity.Attribute("Name"));
         }
         catch (Exception exception) when (exception is InvalidDataException or IOException or UnauthorizedAccessException or System.Xml.XmlException)
         { return new(kind, Source: MetadataSource.MsixManifest, Status: MetadataStatus.Failed, Error: PeMetadataExtractor.ShortError(exception)); }
