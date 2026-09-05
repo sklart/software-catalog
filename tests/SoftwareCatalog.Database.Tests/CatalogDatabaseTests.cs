@@ -1,5 +1,6 @@
 using SoftwareCatalog.Core.Domain;
 using SoftwareCatalog.Database;
+using Microsoft.Data.Sqlite;
 
 namespace SoftwareCatalog.Database.Tests;
 public sealed class CatalogDatabaseTests : IAsyncLifetime
@@ -21,5 +22,16 @@ public sealed class CatalogDatabaseTests : IAsyncLifetime
         await _database.UpsertInstallersAsync([new(0, root.Id, "Tool.EXE", "Tool.EXE", ".exe", 1, now, "A", now, now, true)], CancellationToken.None);
         await _database.UpsertInstallersAsync([new(0, root.Id, "tool.exe", "tool.exe", ".exe", 2, now, "B", now, now, true)], CancellationToken.None);
         var file = (await _database.GetInstallersAsync(CancellationToken.None)).Single(); Assert.Equal(2, file.Size); Assert.Equal("B", file.Sha256);
+    }
+    [Fact] public async Task MigrationAndConstraintsAreEnforced()
+    {
+        await using var connection = new SqliteConnection($"Data Source={Path.Combine(_folder, "catalog.db")};Pooling=False"); await connection.OpenAsync();
+        await using (var pragma = connection.CreateCommand()) { pragma.CommandText = "PRAGMA foreign_keys=ON"; await pragma.ExecuteNonQueryAsync(); }
+        await using (var migration = connection.CreateCommand()) { migration.CommandText = "SELECT MAX(version) FROM schema_migrations"; Assert.Equal(2L, Convert.ToInt64(await migration.ExecuteScalarAsync())); }
+        await using (var foreignKey = connection.CreateCommand()) { foreignKey.CommandText = "INSERT INTO installer_files(scan_root_id,relative_path,file_name,extension,size,last_write_utc,first_seen_utc,last_seen_utc,exists_flag) VALUES(999,'orphan.exe','orphan.exe','.exe',1,'2026-01-01','2026-01-01','2026-01-01',1)"; await Assert.ThrowsAsync<SqliteException>(() => foreignKey.ExecuteNonQueryAsync()); }
+        var root = await _database.AddScanRootAsync("C:\\Unique", ScanRootPathKind.Absolute, true, CancellationToken.None); var now = DateTimeOffset.UtcNow;
+        await _database.UpsertInstallersAsync([new(0, root.Id, "duplicate.exe", "duplicate.exe", ".exe", 1, now, null, now, now, true)], CancellationToken.None);
+        await _database.UpsertInstallersAsync([new(0, root.Id, "DUPLICATE.EXE", "DUPLICATE.EXE", ".exe", 2, now, null, now, now, true)], CancellationToken.None);
+        Assert.Single(await _database.GetInstallersAsync(CancellationToken.None), file => file.ScanRootId == root.Id);
     }
 }
