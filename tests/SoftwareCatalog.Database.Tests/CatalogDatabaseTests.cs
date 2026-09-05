@@ -55,7 +55,7 @@ public sealed class CatalogDatabaseTests : IAsyncLifetime
     }
     [Fact] public async Task DatabaseFailureLogsContextAndPreservesException()
     {
-        var logger = new TestLogger(); var blocker = Path.Combine(_folder, "not-a-directory"); await File.WriteAllTextAsync(blocker, "x"); var database = new CatalogDatabase(Path.Combine(blocker, "catalog.db"), logger); var exception = await Assert.ThrowsAnyAsync<Exception>(() => database.GetScanRootsAsync(CancellationToken.None)); Assert.NotNull(exception); Assert.Contains(logger.Errors, message => message.Contains("databasePath=") && message.Contains("Open"));
+        var logger = new TestLogger(); var blocker = Path.Combine(_folder, "not-a-directory"); await File.WriteAllTextAsync(blocker, "x"); var database = new CatalogDatabase(Path.Combine(blocker, "catalog.db"), logger); var exception = await Assert.ThrowsAnyAsync<Exception>(() => database.GetScanRootsAsync(CancellationToken.None)); Assert.NotNull(exception); Assert.Contains(logger.Errors, message => message.Contains("GetScanRoots") && message.Contains("databasePath="));
     }
     [Fact] public async Task UpsertFailureLogsOperationContextAndPreservesException()
     {
