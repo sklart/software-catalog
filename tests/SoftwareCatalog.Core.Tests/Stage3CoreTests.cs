@@ -36,4 +36,12 @@ public sealed class Stage3CoreTests
         var match = new ProductMatchingService(new ProductNormalizer()).FindMatch(existing with { Id = 2, ProductId = null }, [existing]);
         Assert.Equal(ProductMatchSource.MsixIdentity, match!.Source); Assert.Equal(ProductMatchConfidence.High, match.Confidence);
     }
+    [Fact]
+    public void MatchingUsesProductCodeButRejectsDifferentStableCodes()
+    {
+        var now = DateTimeOffset.UtcNow; var id = Guid.NewGuid(); var matcher = new ProductMatchingService(new ProductNormalizer());
+        var existing = new InstallerFile(1, 1, "a.msi", "a.msi", ".msi", 1, now, null, now, now, true, ProductId: id, ProductCode: "product-a", UpgradeCode: "upgrade-a");
+        var productMatch = matcher.FindMatch(existing with { Id = 2, ProductId = null, ProductCode = "product-a", UpgradeCode = null }, [existing]); Assert.Equal(ProductMatchSource.MsiProductCode, productMatch!.Source); Assert.Equal(ProductMatchConfidence.High, productMatch.Confidence);
+        Assert.Null(matcher.FindMatch(existing with { Id = 3, ProductId = null, ProductCode = "product-b", UpgradeCode = "upgrade-b" }, [existing]));
+    }
 }
