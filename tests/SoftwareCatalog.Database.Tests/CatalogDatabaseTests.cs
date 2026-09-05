@@ -15,4 +15,11 @@ public sealed class CatalogDatabaseTests : IAsyncLifetime
         Assert.Single(await _database.GetInstallersAsync(CancellationToken.None)); await _database.MarkMissingAsync(root.Id, now.AddSeconds(1), CancellationToken.None);
         Assert.False((await _database.GetInstallersAsync(CancellationToken.None)).Single().Exists);
     }
+    [Fact] public async Task CaseOnlyPathIsUpdatedInsteadOfDuplicated()
+    {
+        var root = await _database.AddScanRootAsync("C:\\Software", ScanRootPathKind.Absolute, true, CancellationToken.None); var now = DateTimeOffset.UtcNow;
+        await _database.UpsertInstallersAsync([new(0, root.Id, "Tool.EXE", "Tool.EXE", ".exe", 1, now, "A", now, now, true)], CancellationToken.None);
+        await _database.UpsertInstallersAsync([new(0, root.Id, "tool.exe", "tool.exe", ".exe", 2, now, "B", now, now, true)], CancellationToken.None);
+        var file = (await _database.GetInstallersAsync(CancellationToken.None)).Single(); Assert.Equal(2, file.Size); Assert.Equal("B", file.Sha256);
+    }
 }

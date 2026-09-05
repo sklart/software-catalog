@@ -19,6 +19,16 @@ public sealed class CatalogScannerTests
         var folder = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")); Directory.CreateDirectory(folder); var path = Path.Combine(folder, "setup.exe"); await File.WriteAllTextAsync(path, "one");
         try { var repo = new MemoryRepository(); var root = await repo.AddScanRootAsync(folder, ScanRootPathKind.Absolute, true, CancellationToken.None); var scanner = new CatalogScanner(repo, new Resolver(), new FakeHash(), new CatalogScannerOptions { MaxDegreeOfParallelism = 1 }); await scanner.ScanAsync(root, null, CancellationToken.None); File.Delete(path); await scanner.ScanAsync(root, null, CancellationToken.None); Assert.False((await repo.GetInstallersAsync(CancellationToken.None)).Single().Exists); } finally { Directory.Delete(folder, true); }
     }
+    [Fact] public async Task ChangedOnlyModifiedTimeRecalculatesHash()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")); Directory.CreateDirectory(folder); var path = Path.Combine(folder, "setup.exe"); await File.WriteAllTextAsync(path, "same");
+        try { var repo = new MemoryRepository(); var root = await repo.AddScanRootAsync(folder, ScanRootPathKind.Absolute, true, CancellationToken.None); var hash = new FakeHash(); var scanner = new CatalogScanner(repo, new Resolver(), hash, new CatalogScannerOptions { MaxDegreeOfParallelism = 1 }); await scanner.ScanAsync(root, null, CancellationToken.None); File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddSeconds(2)); await scanner.ScanAsync(root, null, CancellationToken.None); Assert.Equal(2, hash.Count); } finally { Directory.Delete(folder, true); }
+    }
+    [Fact] public async Task CancelledScanDoesNotMarkKnownFileMissing()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")); Directory.CreateDirectory(folder); await File.WriteAllTextAsync(Path.Combine(folder, "setup.exe"), "one");
+        try { var repo = new MemoryRepository(); var root = await repo.AddScanRootAsync(folder, ScanRootPathKind.Absolute, true, CancellationToken.None); var scanner = new CatalogScanner(repo, new Resolver(), new FakeHash(), new CatalogScannerOptions { MaxDegreeOfParallelism = 1 }); await scanner.ScanAsync(root, null, CancellationToken.None); using var cancellation = new CancellationTokenSource(); cancellation.Cancel(); var result = await scanner.ScanAsync(root, null, cancellation.Token); Assert.False(result.Completed); Assert.True((await repo.GetInstallersAsync(CancellationToken.None)).Single().Exists); } finally { Directory.Delete(folder, true); }
+    }
     private sealed class Resolver : IPortablePathResolver { public string Resolve(ScanRoot r)=>r.StoredPath; public string ToStoredPath(string p,ScanRootPathKind k)=>p; public string GetRelativePath(ScanRoot r,string p)=>Path.GetRelativePath(r.StoredPath,p); public ScanRootAvailability GetAvailability(ScanRoot r)=>ScanRootAvailability.Available; }
     private sealed class FakeHash : IFileHashCalculator { public int Count; public Task<string> ComputeSha256Async(string p,CancellationToken t)=>Task.FromResult((++Count).ToString()); }
     private sealed class MemoryRepository : IScanCatalogRepository
