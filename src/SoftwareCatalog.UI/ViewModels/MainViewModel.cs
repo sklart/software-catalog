@@ -43,7 +43,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private async Task ScanAsync() { if (SelectedScanRoot is null || IsScanning) return; IsScanning = true; _cts = new(); StatusText = "Сканирование..."; try { var result = await _scanner.ScanAsync(SelectedScanRoot, new Progress<ScanProgress>(p => StatusText = $"Файлов: {p.Discovered} | Обработано: {p.Processed} | Ошибок: {p.Errors}"), _cts.Token); await _catalog.RegroupAsync(_cts.Token); StatusText = result.Completed ? $"Завершено. Файлов: {result.ProcessedFiles}; ошибок: {result.Errors.Count}" : "Сканирование отменено."; await RefreshFilesAsync(); await RefreshProductsAsync(); } catch (OperationCanceledException) { StatusText = "Операция отменена."; } finally { IsScanning = false; _cts.Dispose(); _cts = null; } }
     private async Task RefreshFilesAsync() { Files.Clear(); foreach (var file in await _repository.GetInstallersAsync(CancellationToken.None)) Files.Add(file); }
     private async Task RefreshProductsAsync() { Products.Clear(); foreach (var product in await _products.GetProductsAsync(CancellationToken.None)) Products.Add(product); }
-    private async Task RefreshProductFilesAsync() { ProductFiles.Clear(); if (SelectedProduct is null) return; foreach (var file in await _products.GetInstallersForProductAsync(SelectedProduct.Id, CancellationToken.None)) ProductFiles.Add(file); }
+    private async Task RefreshProductFilesAsync()
+    {
+        ProductFiles.Clear();
+        var view = CollectionViewSource.GetDefaultView(ProductFiles);
+        if (view.GroupDescriptions.OfType<PropertyGroupDescription>().All(group => group.PropertyName != nameof(InstallerFile.NormalizedVersion))) view.GroupDescriptions.Add(new PropertyGroupDescription(nameof(InstallerFile.NormalizedVersion)));
+        if (SelectedProduct is null) return;
+        foreach (var file in await _products.GetInstallersForProductAsync(SelectedProduct.Id, CancellationToken.None)) ProductFiles.Add(file);
+    }
     public async Task RefreshArchiveOperationsAsync()
     {
         ArchiveOperations.Clear(); ArchiveHistoryRows.Clear();
