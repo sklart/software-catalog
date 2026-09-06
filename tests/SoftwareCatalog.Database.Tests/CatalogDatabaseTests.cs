@@ -18,6 +18,17 @@ public sealed class CatalogDatabaseTests : IAsyncLifetime
         Assert.Single(await _database.GetInstallersAsync(CancellationToken.None)); await _database.MarkMissingAsync(root.Id, now.AddSeconds(1), CancellationToken.None);
         Assert.False((await _database.GetInstallersAsync(CancellationToken.None)).Single().Exists);
     }
+    [Fact] public async Task StorageAndArchiveHistorySurviveDatabaseRestart()
+    {
+        var root = await _database.AddScanRootAsync("C:\\Installers", ScanRootPathKind.Absolute, true, CancellationToken.None); var now = DateTimeOffset.UtcNow; var product = Guid.NewGuid();
+        await _database.UpsertInstallersAsync([new InstallerFile(0, root.Id, "tool.exe", "tool.exe", ".exe", 42, now, "SHA", now, now, true, ProductName:"Tool", ProductId:product)], CancellationToken.None);
+        var file = Assert.Single(await _database.GetInstallersAsync(CancellationToken.None)); var archive = await _database.EnsureManagedScanRootAsync(ScanRootRole.Archive, "Archive", ScanRootPathKind.RelativeToApplication, CancellationToken.None);
+        var changed = now.AddMinutes(1); await _database.UpdateInstallerStorageAsync(new InstallerStorageUpdate(file.Id, archive.Id, "Tool/tool.exe", InstallerStorageState.Archived, "SHA", root.Id, "tool.exe", changed), CancellationToken.None); await _database.SetInstallerPinnedAsync(file.Id, true, CancellationToken.None);
+        var operation = new ArchiveOperation(Guid.NewGuid(), file.Id, product, ArchiveOperationType.Archive, InstallerStorageState.Active, InstallerStorageState.Archived, "C:\\Installers\\tool.exe", "Archive\\Tool\\tool.exe", "SHA", ArchiveOperationStatus.Completed, null, now, changed); await _database.SaveArchiveOperationAsync(operation, CancellationToken.None);
+        var restarted = new CatalogDatabase(Path.Combine(_folder, "catalog.db")); await restarted.InitializeAsync(CancellationToken.None);
+        var restored = Assert.Single(await restarted.GetInstallersAsync(CancellationToken.None)); Assert.Equal(InstallerStorageState.Archived, restored.StorageState); Assert.True(restored.IsPinned); Assert.Equal(changed, restored.StorageChangedUtc); Assert.Equal(root.Id, restored.OriginalScanRootId); Assert.Equal("tool.exe", restored.OriginalRelativePath); Assert.Equal("SHA", restored.Sha256);
+        Assert.Equal(operation, Assert.Single(await restarted.GetArchiveOperationsAsync(file.Id, CancellationToken.None)));
+    }
     [Fact] public async Task CaseOnlyPathIsUpdatedInsteadOfDuplicated()
     {
         var root = await _database.AddScanRootAsync("C:\\Software", ScanRootPathKind.Absolute, true, CancellationToken.None); var now = DateTimeOffset.UtcNow;

@@ -31,4 +31,16 @@ public sealed class PortablePathResolverTests
         var a = Path.Combine(Path.GetTempPath(), "DriveA", "SoftwareCatalog"); var b = Path.Combine(Path.GetTempPath(), "DriveB", "SoftwareCatalog"); var settings = AppSettings.Default with { DownloadDestination = "Downloads", DownloadDestinationKind = DownloadDestinationKind.RelativeToApplication };
         Assert.Equal(Path.Combine(a, "Downloads"), DownloadDestinationResolver.Resolve(settings, new PortableAppPathService(a))); Assert.Equal(Path.Combine(b, "Downloads"), DownloadDestinationResolver.Resolve(settings, new PortableAppPathService(b)));
     }
+    [Fact]
+    public void RelativeArchiveAndTrashMoveWithApplicationWhileAbsoluteArchiveStaysPut()
+    {
+        var a = Path.Combine(Path.GetTempPath(), "DriveA", "SoftwareCatalog"); var b = Path.Combine(Path.GetTempPath(), "DriveB", "SoftwareCatalog");
+        var relative = AppSettings.Default with { ArchiveDestination = "Archive", ArchiveDestinationKind = ArchiveDestinationKind.RelativeToApplication };
+        var archiveA = new ArchiveLocationResolver(relative, new PortableAppPathService(a)); var archiveB = new ArchiveLocationResolver(relative, new PortableAppPathService(b));
+        Assert.Equal(Path.Combine(a, "Archive"), archiveA.ArchiveRoot); Assert.Equal(Path.Combine(a, "Archive", "Trash"), archiveA.TrashRoot);
+        Assert.Equal(Path.Combine(b, "Archive"), archiveB.ArchiveRoot); Assert.Equal(Path.Combine(b, "Archive", "Trash"), archiveB.TrashRoot);
+        var fixedPath = Path.Combine(Path.GetTempPath(), "DedicatedArchive"); var absolute = AppSettings.Default with { ArchiveDestination = fixedPath, ArchiveDestinationKind = ArchiveDestinationKind.Absolute };
+        Assert.Equal(Path.GetFullPath(fixedPath), new ArchiveLocationResolver(absolute, new PortableAppPathService(a)).ArchiveRoot);
+        Assert.Equal(Path.GetFullPath(fixedPath), new ArchiveLocationResolver(absolute, new PortableAppPathService(b)).ArchiveRoot);
+    }
 }
