@@ -6,9 +6,10 @@ namespace SoftwareCatalog.Scanner;
 public sealed record ArchiveActionResult(ArchiveOperationStatus Status, ArchiveOperation Operation, string? Error = null);
 
 /// <summary>Serial, local-only storage transitions. The database is changed only after the final file is verified.</summary>
-public sealed class InstallerArchiveService(IScanCatalogRepository repository, IPortablePathResolver paths, IArchiveLocationResolver locations, IFileHashCalculator hashes, IAppLogger? logger = null)
+public sealed class InstallerArchiveService(IScanCatalogRepository repository, IPortablePathResolver paths, IArchiveLocationResolver locations, IFileHashCalculator hashes, IAppLogger? logger = null, IArchiveFileSystem? archiveFileSystem = null)
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly IArchiveFileSystem fileSystem = archiveFileSystem ?? new SystemArchiveFileSystem();
     public Task<ArchiveActionResult> ArchiveAsync(InstallerFile file, CancellationToken token) => MoveAsync(file, InstallerStorageState.Archived, null, token);
     public Task<ArchiveActionResult> TrashAsync(InstallerFile file, CancellationToken token) => MoveAsync(file, InstallerStorageState.Trashed, null, token);
     public Task<ArchiveActionResult> RestoreAsync(InstallerFile file, string? alternateDestination, CancellationToken token) => MoveAsync(file, InstallerStorageState.Active, alternateDestination, token);
@@ -20,7 +21,7 @@ public sealed class InstallerArchiveService(IScanCatalogRepository repository, I
         {
             var source = await ResolvePathAsync(file, token); var op = NewOperation(file, ArchiveOperationType.Purge, source, null, null);
             await repository.SaveArchiveOperationAsync(op, token);
-            try { File.Delete(source); await repository.MarkInstallerPurgedAsync(file.Id, token); return await CompleteAsync(op, ArchiveOperationStatus.Completed, null, token); }
+            try { fileSystem.Delete(source); await repository.MarkInstallerPurgedAsync(file.Id, token); return await CompleteAsync(op, ArchiveOperationStatus.Completed, null, token); }
             catch (Exception ex) { return await CompleteAsync(op, ArchiveOperationStatus.Error, ex.Message, token); }
         } finally { _gate.Release(); }
     }
@@ -31,37 +32,39 @@ public sealed class InstallerArchiveService(IScanCatalogRepository repository, I
         await _gate.WaitAsync(token); try
         {
             var source = await ResolvePathAsync(file, token); var type = state == InstallerStorageState.Archived ? ArchiveOperationType.Archive : state == InstallerStorageState.Trashed ? ArchiveOperationType.MoveToTrash : file.StorageState == InstallerStorageState.Trashed ? ArchiveOperationType.RestoreFromTrash : ArchiveOperationType.Restore;
-            if (!File.Exists(source)) return await FinishAsync(file, type, source, null, ArchiveOperationStatus.Error, "Исходный файл исчез до выполнения операции.", token);
+            if (!fileSystem.Exists(source)) return await FinishAsync(file, type, source, null, ArchiveOperationStatus.Error, "Исходный файл исчез до выполнения операции.", token);
             if (IsTransient(source)) return await FinishAsync(file, type, source, null, ArchiveOperationStatus.Error, "Временный или незавершённый файл нельзя перемещать в архив.", token);
             var destination = await GetDestinationAsync(file, state, alternateDestination, token); var op = NewOperation(file, type, source, destination, file.Sha256);
             await repository.SaveArchiveOperationAsync(op, token);
+            var finalized = false; var databaseUpdated = false; string? sourceHash = null;
             try
             {
-                var sourceHash = file.Sha256 ?? await hashes.ComputeSha256Async(source, token);
-                if (File.Exists(destination)) { var existing = await hashes.ComputeSha256Async(destination, token); return await CompleteAsync(op with { Sha256 = sourceHash }, string.Equals(existing, sourceHash, StringComparison.OrdinalIgnoreCase) ? ArchiveOperationStatus.AlreadyExists : ArchiveOperationStatus.Conflict, null, token); }
-                Directory.CreateDirectory(Path.GetDirectoryName(destination)!); var part = destination + ".archive-part";
+                sourceHash = file.Sha256 ?? await hashes.ComputeSha256Async(source, token);
+                if (fileSystem.Exists(destination)) { var existing = await hashes.ComputeSha256Async(destination, token); return await CompleteAsync(op with { Sha256 = sourceHash }, string.Equals(existing, sourceHash, StringComparison.OrdinalIgnoreCase) ? ArchiveOperationStatus.AlreadyExists : ArchiveOperationStatus.Conflict, null, token); }
+                fileSystem.CreateDirectory(Path.GetDirectoryName(destination)!); var part = destination + ".archive-part";
                 try
                 {
-                    await CopyAsync(source, part, token);
-                    if (new FileInfo(source).Length != new FileInfo(part).Length || !string.Equals(sourceHash, await hashes.ComputeSha256Async(part, token), StringComparison.OrdinalIgnoreCase)) throw new IOException("Проверка SHA-256 после копирования не пройдена.");
-                    File.Move(part, destination, false);
+                    await fileSystem.CopyAsync(source, part, token);
+                    if (fileSystem.GetLength(source) != fileSystem.GetLength(part) || !string.Equals(sourceHash, await hashes.ComputeSha256Async(part, token), StringComparison.OrdinalIgnoreCase)) throw new IOException("Проверка SHA-256 после копирования не пройдена.");
+                    fileSystem.Move(part, destination); finalized = true;
                     var root = state == InstallerStorageState.Active ? await GetRestoreRootAsync(file, destination, alternateDestination, token) : await GetManagedRootAsync(state, token); var relative = Path.GetRelativePath(paths.Resolve(root), destination);
                     if (Path.IsPathRooted(relative) || relative == ".." || relative.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal)) throw new InvalidOperationException("Путь восстановления находится вне выбранного user root.");
                     var originalRoot = file.OriginalScanRootId ?? (file.StorageState == InstallerStorageState.Active ? file.ScanRootId : null);
                     var originalPath = file.OriginalRelativePath ?? (file.StorageState == InstallerStorageState.Active ? file.RelativePath : null);
                     if (state == InstallerStorageState.Active) { originalRoot = null; originalPath = null; }
                     await repository.UpdateInstallerStorageAsync(new(file.Id, root.Id, relative, state, sourceHash, originalRoot, originalPath, DateTimeOffset.UtcNow), token);
-                    File.Delete(source);
+                    databaseUpdated = true;
+                    fileSystem.Delete(source);
                     logger?.Information("archive", $"operation={type} installerId={file.Id} status=completed");
                     return await CompleteAsync(op with { Sha256 = sourceHash }, ArchiveOperationStatus.Completed, null, token);
                 }
-                finally { if (File.Exists(part)) File.Delete(part); }
+                finally { if (fileSystem.Exists(part)) fileSystem.Delete(part); }
             }
-            catch (OperationCanceledException) { return await CompleteAsync(op, ArchiveOperationStatus.Cancelled, null, CancellationToken.None); }
-            catch (Exception ex) { logger?.Error("archive", $"operation={type} installerId={file.Id} error={ex.Message}"); return await CompleteAsync(op, ArchiveOperationStatus.Error, ex.Message, CancellationToken.None); }
+            catch (OperationCanceledException) { await RollbackAsync(); return await CompleteAsync(op, ArchiveOperationStatus.Cancelled, null, CancellationToken.None); }
+            catch (Exception ex) { await RollbackAsync(); logger?.Error("archive", $"operation={type} installerId={file.Id} error={ex.Message}"); return await CompleteAsync(op, ArchiveOperationStatus.Error, ex.Message, CancellationToken.None); }
+            async Task RollbackAsync() { if (databaseUpdated) await repository.UpdateInstallerStorageAsync(new(file.Id,file.ScanRootId,file.RelativePath,file.StorageState,file.Sha256,file.OriginalScanRootId,file.OriginalRelativePath,DateTimeOffset.UtcNow), CancellationToken.None); if (finalized && fileSystem.Exists(destination) && fileSystem.Exists(source)) fileSystem.Delete(destination); }
         } finally { _gate.Release(); }
     }
-    private static async Task CopyAsync(string source, string destination, CancellationToken token) { await using var input = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, FileOptions.Asynchronous); await using var output = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, FileOptions.Asynchronous); await input.CopyToAsync(output, token); await output.FlushAsync(token); }
     private async Task<string> ResolvePathAsync(InstallerFile file, CancellationToken token) { var root = (await repository.GetScanRootsAsync(token)).Single(x => x.Id == file.ScanRootId); return Path.GetFullPath(Path.Combine(paths.Resolve(root), file.RelativePath)); }
     private async Task<ScanRoot> GetManagedRootAsync(InstallerStorageState state, CancellationToken token) => state switch { InstallerStorageState.Archived => await repository.EnsureManagedScanRootAsync(ScanRootRole.Archive, locations.ArchiveStoredPath, locations.PathKind, token), InstallerStorageState.Trashed => await repository.EnsureManagedScanRootAsync(ScanRootRole.Trash, locations.PathKind == ScanRootPathKind.Absolute ? locations.TrashRoot : Path.Combine(locations.ArchiveStoredPath, "Trash"), locations.PathKind, token), _ => throw new InvalidOperationException("Managed root requested for active storage.") };
     private async Task<ScanRoot> GetRestoreRootAsync(InstallerFile file, string destination, string? alternate, CancellationToken token)
