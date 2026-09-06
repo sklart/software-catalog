@@ -55,6 +55,13 @@ public sealed class InstallerRetentionPlannerTests
         var crossProduct = _planner.CreatePlan([File(1,"1.0",sha:"A", product:Guid.NewGuid()), File(2,"1.0",sha:"A", product:Guid.NewGuid())], 1);
         Assert.All(crossProduct.Items, x => Assert.Equal(RetentionAction.ManualReview,x.Action));
     }
+    [Fact] public void NullProductInSameShaGroupRequiresManualReview()
+    {
+        var unknown = File(1, "1.0", sha:"A") with { ProductId = null };
+        var known = File(2, "1.0", sha:"A");
+        var classifications = new DuplicateInstallerService().Classify([unknown, known]);
+        Assert.All(classifications.Values, action => Assert.Equal(RetentionAction.ManualReview, action));
+    }
     private static RetentionPlanItem Item(RetentionPlan plan, long id) => plan.Items.Single(x => x.Installer.Id == id);
     private static InstallerFile File(long id, string? version, bool pinned=false, InstallerStorageState state=InstallerStorageState.Active, string? sha=null, Guid? product=null, string? architecture=null)
     { var now=DateTimeOffset.UtcNow; return new InstallerFile(id,1,$"{id}.exe",$"{id}.exe",".exe",100,now,sha,now,now,true,ProductName:"Tool",ProductVersion:version,NormalizedVersion:version,ProductId:product ?? Guid.Parse("11111111-1111-1111-1111-111111111111"),Architecture:architecture,StorageState:state,IsPinned:pinned); }

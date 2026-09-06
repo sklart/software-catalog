@@ -23,16 +23,17 @@ public sealed class DuplicateInstallerService
         var output = new Dictionary<long, RetentionAction>();
         foreach (var group in files.Where(x => x.Exists && !string.IsNullOrWhiteSpace(x.Sha256)).GroupBy(x => x.Sha256!, StringComparer.OrdinalIgnoreCase).Where(x => x.Count() > 1))
         {
-            var products = group.Select(x => x.ProductId).Distinct().Count();
-            if (products > 1) foreach (var item in group) output[item.Id] = RetentionAction.ManualReview;
+            var productIds = group.Select(x => x.ProductId).Distinct().ToList();
+            if (productIds.Count > 1 || productIds.Any(x => x is null)) foreach (var item in group) output[item.Id] = RetentionAction.ManualReview;
             else
             {
-                var canonical = group.OrderByDescending(x => x.IsPinned).ThenBy(x => x.StorageState).ThenBy(x => x.Id).First();
+                var canonical = group.OrderBy(Priority).ThenBy(x => x.Id).First();
                 foreach (var item in group.Where(x => x.Id != canonical.Id)) output[item.Id] = RetentionAction.DuplicateCandidate;
             }
         }
         return output;
     }
+    private static int Priority(InstallerFile file) => file.IsPinned ? 0 : file.StorageState switch { InstallerStorageState.Active => 1, InstallerStorageState.Archived => 2, InstallerStorageState.Trashed => 3, _ => 4 };
 }
 
 public sealed class InstallerRetentionPlanner(VersionComparer comparer, DuplicateInstallerService duplicates)

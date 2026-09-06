@@ -45,7 +45,7 @@ public sealed class InstallerArchiveService(IScanCatalogRepository repository, I
                 fileSystem.CreateDirectory(Path.GetDirectoryName(destination)!); var part = destination + ".archive-part";
                 try
                 {
-                    await fileSystem.CopyAsync(source, part, token);
+                    await fileSystem.CopyAsync(source, part, new Progress<long>(bytes => progress?.Report(new(file.FileName, type, 0, 1, bytes, file.Size, ArchiveOperationStatus.Running))), token);
                     if (fileSystem.GetLength(source) != fileSystem.GetLength(part) || !string.Equals(sourceHash, await hashes.ComputeSha256Async(part, token), StringComparison.OrdinalIgnoreCase)) throw new IOException("Проверка SHA-256 после копирования не пройдена.");
                     fileSystem.Move(part, destination); finalized = true;
                     var root = state == InstallerStorageState.Active ? await GetRestoreRootAsync(file, destination, alternateDestination, token) : await GetManagedRootAsync(state, token); var relative = Path.GetRelativePath(paths.Resolve(root), destination);
@@ -60,11 +60,27 @@ public sealed class InstallerArchiveService(IScanCatalogRepository repository, I
                     logger?.Information("archive", $"operation={type} installerId={file.Id} status=completed");
                     return await CompleteAsync(op with { Sha256 = sourceHash }, ArchiveOperationStatus.Completed, null, token);
                 }
-                finally { if (fileSystem.Exists(part)) fileSystem.Delete(part); }
+                finally
+                {
+                    try { if (fileSystem.Exists(part)) fileSystem.Delete(part); }
+                    catch (Exception cleanupError) { logger?.Error("archive", $"operation={type} installerId={file.Id} temporary-cleanup-error={cleanupError.Message}"); }
+                }
             }
             catch (OperationCanceledException) { await RollbackAsync(); return await CompleteAsync(op, ArchiveOperationStatus.Cancelled, null, CancellationToken.None); }
             catch (Exception ex) { await RollbackAsync(); logger?.Error("archive", $"operation={type} installerId={file.Id} error={ex.Message}"); return await CompleteAsync(op, ArchiveOperationStatus.Error, ex.Message, CancellationToken.None); }
-            async Task RollbackAsync() { if (databaseUpdated) await repository.UpdateInstallerStorageAsync(new(file.Id,file.ScanRootId,file.RelativePath,file.StorageState,file.Sha256,file.OriginalScanRootId,file.OriginalRelativePath,DateTimeOffset.UtcNow), CancellationToken.None); if (finalized && fileSystem.Exists(destination) && fileSystem.Exists(source)) fileSystem.Delete(destination); }
+            async Task RollbackAsync()
+            {
+                try
+                {
+                    if (databaseUpdated)
+                        await repository.UpdateInstallerStorageAsync(new(file.Id, file.ScanRootId, file.RelativePath, file.StorageState, file.Sha256, file.OriginalScanRootId, file.OriginalRelativePath, DateTimeOffset.UtcNow), CancellationToken.None);
+                    if (finalized && fileSystem.Exists(destination) && fileSystem.Exists(source)) fileSystem.Delete(destination);
+                }
+                catch (Exception rollbackError)
+                {
+                    logger?.Error("archive", $"operation={type} installerId={file.Id} rollback-error={rollbackError.Message}");
+                }
+            }
         } finally { _gate.Release(); }
     }
     private async Task<string> ResolvePathAsync(InstallerFile file, CancellationToken token) { var root = (await repository.GetScanRootsAsync(token)).Single(x => x.Id == file.ScanRootId); return Path.GetFullPath(Path.Combine(paths.Resolve(root), file.RelativePath)); }
