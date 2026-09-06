@@ -62,7 +62,14 @@ public sealed class InstallerRetentionPlannerTests
         var classifications = new DuplicateInstallerService().Classify([unknown, known]);
         Assert.All(classifications.Values, action => Assert.Equal(RetentionAction.ManualReview, action));
     }
+    [Fact] public void LogsSinglePlanSummary()
+    {
+        var logger = new TestLogger(); var planner = new InstallerRetentionPlanner(new VersionComparer(), new DuplicateInstallerService(), logger);
+        planner.CreatePlan([File(1,"1.0"), File(2,"2.0"), File(3,null), File(4,"1.0",sha:"A"), File(5,"1.0",sha:"A")], 1);
+        var message = Assert.Single(logger.Messages); Assert.Contains("keep=", message); Assert.Contains("archive=", message); Assert.Contains("duplicates=", message); Assert.Contains("manualReview=", message);
+    }
     private static RetentionPlanItem Item(RetentionPlan plan, long id) => plan.Items.Single(x => x.Installer.Id == id);
     private static InstallerFile File(long id, string? version, bool pinned=false, InstallerStorageState state=InstallerStorageState.Active, string? sha=null, Guid? product=null, string? architecture=null)
     { var now=DateTimeOffset.UtcNow; return new InstallerFile(id,1,$"{id}.exe",$"{id}.exe",".exe",100,now,sha,now,now,true,ProductName:"Tool",ProductVersion:version,NormalizedVersion:version,ProductId:product ?? Guid.Parse("11111111-1111-1111-1111-111111111111"),Architecture:architecture,StorageState:state,IsPinned:pinned); }
+    private sealed class TestLogger : SoftwareCatalog.Core.Abstractions.IAppLogger { public List<string> Messages { get; }=[]; public void Information(string operation,string message)=>Messages.Add(message); public void Error(string operation,string message)=>throw new InvalidOperationException(message); }
 }

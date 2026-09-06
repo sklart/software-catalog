@@ -1,4 +1,5 @@
 using SoftwareCatalog.Core.Domain;
+using SoftwareCatalog.Core.Abstractions;
 
 namespace SoftwareCatalog.Core;
 
@@ -36,7 +37,7 @@ public sealed class DuplicateInstallerService
     private static int Priority(InstallerFile file) => file.IsPinned ? 0 : file.StorageState switch { InstallerStorageState.Active => 1, InstallerStorageState.Archived => 2, InstallerStorageState.Trashed => 3, _ => 4 };
 }
 
-public sealed class InstallerRetentionPlanner(VersionComparer comparer, DuplicateInstallerService duplicates)
+public sealed class InstallerRetentionPlanner(VersionComparer comparer, DuplicateInstallerService duplicates, IAppLogger? logger = null)
 {
     public RetentionPlan CreatePlan(IEnumerable<InstallerFile> installers, int keepLatestVersions)
     {
@@ -59,7 +60,9 @@ public sealed class InstallerRetentionPlanner(VersionComparer comparer, Duplicat
         }
         foreach (var file in files.Where(x => x.ProductId is null)) result[file.Id] = new(file, RetentionAction.ManualReview, "Продукт не определён");
         foreach (var pair in duplicates.Classify(files)) if (result.TryGetValue(pair.Key, out var item) && !item.Installer.IsPinned) result[pair.Key] = new RetentionPlanItem(item.Installer, pair.Value, pair.Value == RetentionAction.DuplicateCandidate ? "Дубликат SHA-256" : "Дубликат между продуктами", item.Selected);
-        return new(result.Values.OrderBy(x => x.Installer.ProductName).ThenBy(x => x.Installer.Id).ToList(), keep);
+        var plan = new RetentionPlan(result.Values.OrderBy(x => x.Installer.ProductName).ThenBy(x => x.Installer.Id).ToList(), keep);
+        logger?.Information("retention", $"keep={plan.Items.Count(x => x.Action == RetentionAction.Keep)} archive={plan.Items.Count(x => x.Action == RetentionAction.Archive)} duplicates={plan.Items.Count(x => x.Action == RetentionAction.DuplicateCandidate)} manualReview={plan.Items.Count(x => x.Action == RetentionAction.ManualReview)}");
+        return plan;
     }
     public CatalogSpaceStatistics GetSpaceStatistics(IEnumerable<InstallerFile> files)
     {
