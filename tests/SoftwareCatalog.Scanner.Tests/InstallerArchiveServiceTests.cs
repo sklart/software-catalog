@@ -116,7 +116,13 @@ public sealed class InstallerArchiveServiceTests : IDisposable
         }
         Assert.Equal(expected, result.Status); Assert.Equal(existingContent, await File.ReadAllTextAsync(result.Operation.DestinationPath!));
     }
-    private InstallerArchiveService Service(Repo repo, IArchiveFileSystem? fileSystem = null, IFileHashCalculator? hashes = null) => new(repo,new Resolver(),new Locations(Path.Combine(_folder,"Archive")),hashes ?? new FileHashCalculator(), null, fileSystem);
+    [Fact] public async Task ArchiveLoggerRecordsCompletionFailureCollisionAndPurgeError()
+    {
+        var source = Path.Combine(_folder, "logging"); Directory.CreateDirectory(source); var path = Path.Combine(source, "tool.exe"); await File.WriteAllTextAsync(path, "content"); var repo = new Repo(new ScanRoot(1, source, ScanRootPathKind.Absolute, true, true, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow)); var file = FileRecord(); repo.Files.Add(file); var logger = new TestLogger(); var service = Service(repo, logger: logger);
+        Assert.Equal(ArchiveOperationStatus.Completed, (await service.ArchiveAsync(file, CancellationToken.None)).Status); var archived = repo.Files.Single(); var target = Path.Combine(source, "tool.exe"); await File.WriteAllTextAsync(target, "different"); Assert.Equal(ArchiveOperationStatus.Conflict, (await service.RestoreAsync(archived, null, CancellationToken.None)).Status); Assert.Equal(ArchiveOperationStatus.Error, (await service.PurgeAsync(archived, CancellationToken.None)).Status);
+        Assert.Contains(logger.InformationMessages, message => message.Contains("status=completed")); Assert.Contains(logger.InformationMessages, message => message.Contains("status=Conflict")); Assert.Contains(logger.ErrorMessages, message => message.Contains("operation=Purge"));
+    }
+    private InstallerArchiveService Service(Repo repo, IArchiveFileSystem? fileSystem = null, IFileHashCalculator? hashes = null, IAppLogger? logger = null) => new(repo,new Resolver(),new Locations(Path.Combine(_folder,"Archive")),hashes ?? new FileHashCalculator(), logger, fileSystem);
     private static InstallerFile FileRecord() { var now=DateTimeOffset.UtcNow; return new InstallerFile(42,1,"tool.exe","tool.exe",".exe",7,now,null,now,now,true,ProductName:"Tool",ProductVersion:"1.0",NormalizedVersion:"1.0",ProductId:Guid.Parse("11111111-1111-1111-1111-111111111111")); }
     public void Dispose() { if(Directory.Exists(_folder)) Directory.Delete(_folder,true); }
     private sealed class Resolver : IPortablePathResolver { public string Resolve(ScanRoot root)=>root.StoredPath; public string ToStoredPath(string path,ScanRootPathKind kind)=>path; public string GetRelativePath(ScanRoot root,string path)=>Path.GetRelativePath(root.StoredPath,path); public ScanRootAvailability GetAvailability(ScanRoot root)=>ScanRootAvailability.Available; }
@@ -147,6 +153,11 @@ public sealed class InstallerArchiveServiceTests : IDisposable
         private readonly SystemArchiveFileSystem _inner = new(); public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously); public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public bool Exists(string path) => _inner.Exists(path); public long GetLength(string path) => _inner.GetLength(path); public void CreateDirectory(string path) => _inner.CreateDirectory(path); public void Move(string source, string destination) => _inner.Move(source, destination); public void Delete(string path) => _inner.Delete(path);
         public async Task CopyAsync(string source, string destination, IProgress<long>? progress, CancellationToken token) { await _inner.CopyAsync(source, destination, progress, token); Started.TrySetResult(); await Release.Task.WaitAsync(token); }
+    }
+    private sealed class TestLogger : IAppLogger
+    {
+        public List<string> InformationMessages { get; } = []; public List<string> ErrorMessages { get; } = [];
+        public void Information(string operation, string message) => InformationMessages.Add($"{operation}:{message}"); public void Error(string operation, string message) => ErrorMessages.Add($"{operation}:{message}");
     }
     private sealed class Repo(ScanRoot root) : IScanCatalogRepository
     {
