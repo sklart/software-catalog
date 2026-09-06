@@ -79,9 +79,9 @@ public sealed class InstallerArchiveServiceTests : IDisposable
     }
     [Fact] public async Task HashMismatchRemovesTemporaryCopyAndKeepsSource()
     {
-        var source = Path.Combine(_folder, "hash-mismatch"); Directory.CreateDirectory(source); var path = Path.Combine(source, "tool.exe"); await File.WriteAllTextAsync(path, "content"); var repo = new Repo(new ScanRoot(1, source, ScanRootPathKind.Absolute, true, true, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow)); var file = FileRecord(); repo.Files.Add(file);
-        var result = await Service(repo, null, new MismatchingHashCalculator()).ArchiveAsync(file, CancellationToken.None);
-        Assert.Equal(ArchiveOperationStatus.Error, result.Status); Assert.True(File.Exists(path)); Assert.Equal(InstallerStorageState.Active, repo.Files.Single().StorageState); Assert.Empty(Directory.Exists(Path.Combine(_folder, "Archive")) ? Directory.GetFiles(Path.Combine(_folder, "Archive"), "*", SearchOption.AllDirectories) : []);
+        var source = Path.Combine(_folder, "hash-mismatch"); Directory.CreateDirectory(source); var path = Path.Combine(source, "tool.exe"); await File.WriteAllTextAsync(path, "content"); var repo = new Repo(new ScanRoot(1, source, ScanRootPathKind.Absolute, true, true, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow)); var file = FileRecord(); repo.Files.Add(file); var logger = new TestLogger();
+        var result = await Service(repo, null, new MismatchingHashCalculator(), logger).ArchiveAsync(file, CancellationToken.None);
+        Assert.Equal(ArchiveOperationStatus.Error, result.Status); Assert.True(File.Exists(path)); Assert.Equal(InstallerStorageState.Active, repo.Files.Single().StorageState); Assert.Empty(Directory.Exists(Path.Combine(_folder, "Archive")) ? Directory.GetFiles(Path.Combine(_folder, "Archive"), "*", SearchOption.AllDirectories) : []); Assert.Contains(logger.ErrorMessages, message => message.Contains("operation=Archive") && message.Contains("installerId=42") && message.Contains("SHA-256"));
     }
     [Fact] public async Task QueuedCancellationNeverStartsSecondFilesystemOperation()
     {
