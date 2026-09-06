@@ -15,14 +15,14 @@ public sealed class InstallerArchiveService(IScanCatalogRepository repository, I
     public Task<ArchiveActionResult> RestoreAsync(InstallerFile file, string? alternateDestination, CancellationToken token, IProgress<ArchiveProgress>? progress = null) => MoveAsync(file, InstallerStorageState.Active, alternateDestination, token, progress);
     public async Task<ArchiveActionResult> PurgeAsync(InstallerFile file, CancellationToken token)
     {
-        if (file.StorageState != InstallerStorageState.Trashed) return await FinishAsync(file, ArchiveOperationType.Purge, null, null, ArchiveOperationStatus.Error, "Постоянное удаление разрешено только из корзины.", token);
-        if (file.IsPinned) return await FinishAsync(file, ArchiveOperationType.Purge, null, null, ArchiveOperationStatus.Error, "Закреплённый файл сначала необходимо открепить.", token);
+        if (file.StorageState != InstallerStorageState.Trashed) { logger?.Error("archive", $"operation=Purge installerId={file.Id} error=invalid-state"); return await FinishAsync(file, ArchiveOperationType.Purge, null, null, ArchiveOperationStatus.Error, "Постоянное удаление разрешено только из корзины.", token); }
+        if (file.IsPinned) { logger?.Error("archive", $"operation=Purge installerId={file.Id} error=pinned"); return await FinishAsync(file, ArchiveOperationType.Purge, null, null, ArchiveOperationStatus.Error, "Закреплённый файл сначала необходимо открепить.", token); }
         await _gate.WaitAsync(token); try
         {
             var source = await ResolvePathAsync(file, token); var op = NewOperation(file, ArchiveOperationType.Purge, source, null, null);
             await repository.SaveArchiveOperationAsync(op, token);
-            try { fileSystem.Delete(source); await repository.MarkInstallerPurgedAsync(file.Id, token); return await CompleteAsync(op, ArchiveOperationStatus.Completed, null, token); }
-            catch (Exception ex) { return await CompleteAsync(op, ArchiveOperationStatus.Error, ex.Message, token); }
+            try { fileSystem.Delete(source); await repository.MarkInstallerPurgedAsync(file.Id, token); logger?.Information("archive", $"operation=Purge installerId={file.Id} status=completed"); return await CompleteAsync(op, ArchiveOperationStatus.Completed, null, token); }
+            catch (Exception ex) { logger?.Error("archive", $"operation=Purge installerId={file.Id} error={ex.Message}"); return await CompleteAsync(op, ArchiveOperationStatus.Error, ex.Message, token); }
         } finally { _gate.Release(); }
     }
     private async Task<ArchiveActionResult> MoveAsync(InstallerFile file, InstallerStorageState state, string? alternateDestination, CancellationToken token, IProgress<ArchiveProgress>? progress)
@@ -41,7 +41,7 @@ public sealed class InstallerArchiveService(IScanCatalogRepository repository, I
             try
             {
                 sourceHash = file.Sha256 ?? await hashes.ComputeSha256Async(source, token);
-                if (fileSystem.Exists(destination)) { var existing = await hashes.ComputeSha256Async(destination, token); return await CompleteAsync(op with { Sha256 = sourceHash }, string.Equals(existing, sourceHash, StringComparison.OrdinalIgnoreCase) ? ArchiveOperationStatus.AlreadyExists : ArchiveOperationStatus.Conflict, null, token); }
+                if (fileSystem.Exists(destination)) { var existing = await hashes.ComputeSha256Async(destination, token); var status = string.Equals(existing, sourceHash, StringComparison.OrdinalIgnoreCase) ? ArchiveOperationStatus.AlreadyExists : ArchiveOperationStatus.Conflict; logger?.Information("archive", $"operation={type} installerId={file.Id} status={status}"); return await CompleteAsync(op with { Sha256 = sourceHash }, status, null, token); }
                 fileSystem.CreateDirectory(Path.GetDirectoryName(destination)!); var part = destination + ".archive-part";
                 try
                 {
