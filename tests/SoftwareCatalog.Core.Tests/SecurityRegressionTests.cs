@@ -10,10 +10,12 @@ public sealed class SecurityRegressionTests
         var ui = File.ReadAllText(Path.Combine(root, "src", "SoftwareCatalog.UI", "ViewModels", "MainViewModel.cs"));
         var retention = File.ReadAllText(Path.Combine(root, "src", "SoftwareCatalog.Core", "RetentionModels.cs"));
         var archive = File.ReadAllText(Path.Combine(root, "src", "SoftwareCatalog.Scanner", "InstallerArchiveService.cs"));
+        var stageFiveSources = string.Join('\n', Directory.GetFiles(Path.Combine(root, "src"), "*.cs", SearchOption.AllDirectories).Select(File.ReadAllText));
         Assert.DoesNotContain("winget install", winGet, StringComparison.OrdinalIgnoreCase); Assert.DoesNotContain("winget upgrade", winGet, StringComparison.OrdinalIgnoreCase);
         var starts = ui.Split('\n').Where(line => line.Contains("Process.Start", StringComparison.Ordinal)).ToArray(); Assert.All(starts, line => Assert.Contains("explorer.exe", line, StringComparison.OrdinalIgnoreCase));
         Assert.DoesNotContain("Purge", retention, StringComparison.Ordinal);
         Assert.Contains("file.StorageState != InstallerStorageState.Trashed", archive, StringComparison.Ordinal);
+        Assert.DoesNotContain("PeriodicTimer", stageFiveSources, StringComparison.Ordinal); Assert.DoesNotContain("DispatcherTimer", stageFiveSources, StringComparison.Ordinal); Assert.DoesNotContain("scheduled purge", stageFiveSources, StringComparison.OrdinalIgnoreCase); Assert.DoesNotContain("automatic purge", stageFiveSources, StringComparison.OrdinalIgnoreCase);
     }
     private static IEnumerable<string> Ancestors(string path) { var current = new DirectoryInfo(path); while (current is not null) { yield return current.FullName; current = current.Parent; } }
 }

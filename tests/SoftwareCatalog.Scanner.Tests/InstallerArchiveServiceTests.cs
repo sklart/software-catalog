@@ -63,6 +63,14 @@ public sealed class InstallerArchiveServiceTests : IDisposable
         var result=await Service(repo).ArchiveAsync(file,CancellationToken.None,new Progress<ArchiveProgress>(reported.Add));
         Assert.Equal(ArchiveOperationStatus.Completed,result.Status); Assert.Contains(reported, item => item.BytesProcessed > 0 && item.Status == ArchiveOperationStatus.Running); Assert.Equal(150_000,reported.Last().BytesProcessed);
     }
+    [Fact] public async Task CrossVolumeArchiveCopiesVerifiesFinalizesUpdatesDatabaseThenDeletesSource()
+    {
+        var source = Path.Combine(_folder, "cross-volume-source"); Directory.CreateDirectory(source); var path = Path.Combine(source, "tool.exe"); await File.WriteAllTextAsync(path, "content");
+        var repo = new Repo(new ScanRoot(1, source, ScanRootPathKind.Absolute, true, true, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow)); var file = FileRecord(); repo.Files.Add(file); var fs = new TracingFileSystem(repo.Trace); var hashes = new TracingHashCalculator(repo.Trace);
+        var result = await Service(repo, fs, hashes).ArchiveAsync(file, CancellationToken.None);
+        Assert.Equal(ArchiveOperationStatus.Completed, result.Status); Assert.Equal(["VerifySha", "Copy", "Length", "Length", "VerifySha", "MovePart", "Database", "DeleteSource"], repo.Trace);
+        Assert.DoesNotContain(fs.Moves, move => string.Equals(move.Source, path, StringComparison.OrdinalIgnoreCase) && string.Equals(move.Destination, result.Operation.DestinationPath, StringComparison.OrdinalIgnoreCase));
+    }
     [Fact] public async Task SourceDisappearanceAndPurgeGuardsAreRecordedWithoutChangingState()
     {
         var source = Path.Combine(_folder, "guards"); Directory.CreateDirectory(source); var path = Path.Combine(source, "tool.exe"); await File.WriteAllTextAsync(path, "content"); var repo = new Repo(new ScanRoot(1, source, ScanRootPathKind.Absolute, true, true, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow)); var active = FileRecord(); repo.Files.Add(active); var service = Service(repo);
@@ -125,8 +133,14 @@ public sealed class InstallerArchiveServiceTests : IDisposable
     [Fact] public async Task PurgeDatabaseFailureRestoresRecoverableTrashedFileAndCleanupFailureLeavesStaging()
     {
         var source = Path.Combine(_folder, "purge-safety"); Directory.CreateDirectory(source); var path = Path.Combine(source, "tool.exe"); await File.WriteAllTextAsync(path, "content"); var file = FileRecord() with { StorageState=InstallerStorageState.Trashed };
-        var dbRepo = new Repo(new ScanRoot(1, source, ScanRootPathKind.Absolute, true, true, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow)) { FailPurge = true }; dbRepo.Files.Add(file); var dbFailure = await Service(dbRepo).PurgeAsync(file, CancellationToken.None); Assert.Equal(ArchiveOperationStatus.Error, dbFailure.Status); Assert.True(File.Exists(path)); Assert.True(dbRepo.Files.Single().Exists); Assert.Equal(InstallerStorageState.Trashed, dbRepo.Files.Single().StorageState);
-        var cleanupRepo = new Repo(new ScanRoot(1, source, ScanRootPathKind.Absolute, true, true, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow)); cleanupRepo.Files.Add(file); var cleanup = await Service(cleanupRepo, new FailingFileSystem(Failure.DeleteSource)).PurgeAsync(file, CancellationToken.None); Assert.Equal(ArchiveOperationStatus.Error, cleanup.Status); Assert.False(cleanupRepo.Files.Single().Exists); Assert.True(File.Exists(path + ".purge-staging"));
+        var dbRepo = new Repo(new ScanRoot(1, source, ScanRootPathKind.Absolute, true, true, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow)) { FailPurge = true }; dbRepo.Files.Add(file); var dbFailure = await Service(dbRepo).PurgeAsync(file, CancellationToken.None); Assert.Equal(ArchiveOperationStatus.Error, dbFailure.Status); Assert.True(File.Exists(path)); Assert.False(File.Exists(path + ".purge-staging")); Assert.True(dbRepo.Files.Single().Exists); Assert.Equal(InstallerStorageState.Trashed, dbRepo.Files.Single().StorageState); Assert.Equal(ArchiveOperationStatus.Error, dbRepo.Operations.Last().Status);
+        var cleanupRepo = new Repo(new ScanRoot(1, source, ScanRootPathKind.Absolute, true, true, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow)); cleanupRepo.Files.Add(file); var cleanup = await Service(cleanupRepo, new FailingFileSystem(Failure.DeleteSource)).PurgeAsync(file, CancellationToken.None); Assert.Equal(ArchiveOperationStatus.Error, cleanup.Status); Assert.False(File.Exists(path)); Assert.True(File.Exists(path + ".purge-staging")); Assert.False(cleanupRepo.Files.Single().Exists); Assert.Equal(InstallerStorageState.Trashed, cleanupRepo.Files.Single().StorageState); Assert.Equal(ArchiveOperationStatus.Error, cleanupRepo.Operations.Last().Status);
+    }
+    [Fact] public async Task PurgeStagingMoveFailureLeavesTrashedSourceAndDoesNotCommitDatabase()
+    {
+        var source = Path.Combine(_folder, "purge-move-failure"); Directory.CreateDirectory(source); var path = Path.Combine(source, "tool.exe"); await File.WriteAllTextAsync(path, "content"); var file = FileRecord() with { StorageState = InstallerStorageState.Trashed }; var repo = new Repo(new ScanRoot(1, source, ScanRootPathKind.Absolute, true, true, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow)); repo.Files.Add(file);
+        var result = await Service(repo, new FailingFileSystem(Failure.Move)).PurgeAsync(file, CancellationToken.None);
+        Assert.Equal(ArchiveOperationStatus.Error, result.Status); Assert.True(File.Exists(path)); Assert.False(File.Exists(path + ".purge-staging")); Assert.True(repo.Files.Single().Exists); Assert.Equal(InstallerStorageState.Trashed, repo.Files.Single().StorageState); Assert.Equal(ArchiveOperationStatus.Error, repo.Operations.Last().Status);
     }
     private InstallerArchiveService Service(Repo repo, IArchiveFileSystem? fileSystem = null, IFileHashCalculator? hashes = null, IAppLogger? logger = null) => new(repo,new Resolver(),new Locations(Path.Combine(_folder,"Archive")),hashes ?? new FileHashCalculator(), logger, fileSystem);
     private static InstallerFile FileRecord() { var now=DateTimeOffset.UtcNow; return new InstallerFile(42,1,"tool.exe","tool.exe",".exe",7,now,null,now,now,true,ProductName:"Tool",ProductVersion:"1.0",NormalizedVersion:"1.0",ProductId:Guid.Parse("11111111-1111-1111-1111-111111111111")); }
@@ -154,6 +168,17 @@ public sealed class InstallerArchiveServiceTests : IDisposable
     {
         public Task<string> ComputeSha256Async(string path, CancellationToken token) => Task.FromResult(path.EndsWith(".archive-part", StringComparison.OrdinalIgnoreCase) ? "B" : "A");
     }
+    private sealed class TracingHashCalculator(List<string> trace) : IFileHashCalculator
+    {
+        public async Task<string> ComputeSha256Async(string path, CancellationToken token) { trace.Add("VerifySha"); return await new FileHashCalculator().ComputeSha256Async(path, token); }
+    }
+    private sealed class TracingFileSystem(List<string> trace) : IArchiveFileSystem
+    {
+        private readonly SystemArchiveFileSystem _inner = new(); public List<(string Source, string Destination)> Moves { get; } = [];
+        public bool Exists(string path) => _inner.Exists(path); public long GetLength(string path) { trace.Add("Length"); return _inner.GetLength(path); } public void CreateDirectory(string path) => _inner.CreateDirectory(path);
+        public async Task CopyAsync(string source, string destination, IProgress<long>? progress, CancellationToken token) { trace.Add("Copy"); await _inner.CopyAsync(source, destination, progress, token); }
+        public void Move(string source, string destination) { Moves.Add((source, destination)); trace.Add("MovePart"); _inner.Move(source, destination); } public void Delete(string path) { trace.Add("DeleteSource"); _inner.Delete(path); }
+    }
     private sealed class BlockingFileSystem : IArchiveFileSystem
     {
         private readonly SystemArchiveFileSystem _inner = new(); public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously); public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -167,10 +192,10 @@ public sealed class InstallerArchiveServiceTests : IDisposable
     }
     private sealed class Repo(ScanRoot root) : IScanCatalogRepository
     {
-        private readonly List<ScanRoot> _roots=[root]; public List<InstallerFile> Files { get; }=[]; public List<ArchiveOperation> Operations { get; }=[]; public bool FailStorageUpdate { get; set; } public bool FailPurge { get; set; }
+        private readonly List<ScanRoot> _roots=[root]; public List<InstallerFile> Files { get; }=[]; public List<ArchiveOperation> Operations { get; }=[]; public List<string> Trace { get; } = []; public bool FailStorageUpdate { get; set; } public bool FailPurge { get; set; }
         public Task<IReadOnlyList<ScanRoot>> GetScanRootsAsync(CancellationToken t)=>Task.FromResult<IReadOnlyList<ScanRoot>>(_roots); public Task<ScanRoot> AddScanRootAsync(string p,ScanRootPathKind k,bool i,CancellationToken t) { var added=new ScanRoot(_roots.Count+1,p,k,i,true,DateTimeOffset.UtcNow,DateTimeOffset.UtcNow);_roots.Add(added);return Task.FromResult(added); } public Task UpdateScanRootAsync(long i,string p,ScanRootPathKind k,CancellationToken t)=>Task.CompletedTask; public Task RemoveScanRootAsync(long i,CancellationToken t)=>Task.CompletedTask; public Task<InstallerFile?> FindInstallerAsync(long r,string p,CancellationToken t)=>Task.FromResult(Files.SingleOrDefault(x=>x.ScanRootId==r&&x.RelativePath==p)); public Task UpsertInstallersAsync(IReadOnlyList<InstallerFile> f,CancellationToken t)=>Task.CompletedTask; public Task MarkMissingAsync(long r,DateTimeOffset s,CancellationToken t)=>Task.CompletedTask; public Task<IReadOnlyList<InstallerFile>> GetInstallersAsync(CancellationToken t)=>Task.FromResult<IReadOnlyList<InstallerFile>>(Files);
         public Task<ScanRoot> EnsureManagedScanRootAsync(ScanRootRole role,string path,ScanRootPathKind kind,CancellationToken t) { var old=_roots.SingleOrDefault(x=>x.Role==role); if(old is not null)return Task.FromResult(old); var next=new ScanRoot(_roots.Count+1,path,kind,true,true,DateTimeOffset.UtcNow,DateTimeOffset.UtcNow,role);_roots.Add(next);return Task.FromResult(next); }
-        public Task UpdateInstallerStorageAsync(InstallerStorageUpdate update,CancellationToken t) { if(FailStorageUpdate) { FailStorageUpdate=false; throw new IOException("database failure"); } var index=Files.FindIndex(x=>x.Id==update.InstallerId); var old=Files[index]; Files[index]=old with { ScanRootId=update.ScanRootId,RelativePath=update.RelativePath,StorageState=update.StorageState,Sha256=update.Sha256??old.Sha256,OriginalScanRootId=update.OriginalScanRootId,OriginalRelativePath=update.OriginalRelativePath,StorageChangedUtc=update.ChangedUtc }; return Task.CompletedTask; }
+        public Task UpdateInstallerStorageAsync(InstallerStorageUpdate update,CancellationToken t) { if(FailStorageUpdate) { FailStorageUpdate=false; throw new IOException("database failure"); } Trace.Add("Database"); var index=Files.FindIndex(x=>x.Id==update.InstallerId); var old=Files[index]; Files[index]=old with { ScanRootId=update.ScanRootId,RelativePath=update.RelativePath,StorageState=update.StorageState,Sha256=update.Sha256??old.Sha256,OriginalScanRootId=update.OriginalScanRootId,OriginalRelativePath=update.OriginalRelativePath,StorageChangedUtc=update.ChangedUtc }; return Task.CompletedTask; }
         public Task SetInstallerPinnedAsync(long id,bool value,CancellationToken t)=>Task.CompletedTask; public Task MarkInstallerPurgedAsync(long id,CancellationToken t) { if(FailPurge) { FailPurge=false; throw new IOException("purge database failure"); } var i=Files.FindIndex(x=>x.Id==id);Files[i]=Files[i] with { Exists=false };return Task.CompletedTask; } public Task SaveArchiveOperationAsync(ArchiveOperation operation,CancellationToken t) { Operations.RemoveAll(x=>x.Id==operation.Id);Operations.Add(operation);return Task.CompletedTask; } public Task<IReadOnlyList<ArchiveOperation>> GetArchiveOperationsAsync(long? id,CancellationToken t)=>Task.FromResult<IReadOnlyList<ArchiveOperation>>(Operations);
     }
 }

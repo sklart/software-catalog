@@ -38,6 +38,12 @@ public sealed class InstallerRetentionPlannerTests
         Assert.Equal(1,plan.KeepLatestVersions); Assert.DoesNotContain(plan.Items,x=>x.Installer.Id==3); Assert.Equal(RetentionAction.Archive,Item(plan,1).Action);
         Assert.Empty(new DuplicateInstallerService().Classify([File(4,"1.0"),File(5,"1.0")]));
     }
+    [Fact] public void PurgedTombstoneIsNotAReachableCopyOrRetentionCandidate()
+    {
+        var tombstone = File(3, "9.0", state: InstallerStorageState.Trashed) with { Exists = false };
+        var plan = _planner.CreatePlan([File(1, "1.0"), File(2, "2.0"), tombstone], 1);
+        Assert.DoesNotContain(plan.Items, item => item.Installer.Id == tombstone.Id); Assert.DoesNotContain(tombstone, plan.Items.Select(item => item.Installer));
+    }
     [Fact] public void CanonicalDuplicatePrefersPinnedThenActiveThenArchived()
     {
         var service=new DuplicateInstallerService(); var copies=new[] { File(1,"1.0",sha:"A",state:InstallerStorageState.Trashed), File(2,"1.0",sha:"A",state:InstallerStorageState.Archived), File(3,"1.0",sha:"A"), File(4,"1.0",sha:"A",pinned:true,state:InstallerStorageState.Trashed) };
@@ -67,6 +73,12 @@ public sealed class InstallerRetentionPlannerTests
         var logger = new TestLogger(); var planner = new InstallerRetentionPlanner(new VersionComparer(), new DuplicateInstallerService(), logger);
         planner.CreatePlan([File(1,"1.0"), File(2,"2.0"), File(3,null), File(4,"1.0",sha:"A"), File(5,"1.0",sha:"A")], 1);
         var message = Assert.Single(logger.Messages); Assert.Contains("keep=", message); Assert.Contains("archive=", message); Assert.Contains("duplicates=", message); Assert.Contains("manualReview=", message);
+    }
+    [Fact] public void LogsExactSummaryForKnownKeepArchiveDuplicateAndManualReviewPlan()
+    {
+        var logger = new TestLogger(); var planner = new InstallerRetentionPlanner(new VersionComparer(), new DuplicateInstallerService(), logger); var product = Guid.Parse("11111111-1111-1111-1111-111111111111");
+        var plan = planner.CreatePlan([File(1,"3.0", product:product), File(2,"2.0", product:product), File(3,"3.0", sha:"D", product:product), File(4,"3.0", sha:"D", product:product), File(5,"1.0", sha:"U") with { ProductId = null }], 1);
+        Assert.Equal(RetentionAction.Keep, Item(plan,1).Action); Assert.Equal(RetentionAction.Archive, Item(plan,2).Action); Assert.Single(plan.Items, item => item.Action == RetentionAction.DuplicateCandidate); Assert.Equal(RetentionAction.ManualReview, Item(plan,5).Action); Assert.Equal("keep=2 archive=1 duplicates=1 manualReview=1", Assert.Single(logger.Messages));
     }
     private static RetentionPlanItem Item(RetentionPlan plan, long id) => plan.Items.Single(x => x.Installer.Id == id);
     private static InstallerFile File(long id, string? version, bool pinned=false, InstallerStorageState state=InstallerStorageState.Active, string? sha=null, Guid? product=null, string? architecture=null)
