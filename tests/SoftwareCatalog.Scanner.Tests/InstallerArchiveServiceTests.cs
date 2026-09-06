@@ -83,6 +83,14 @@ public sealed class InstallerArchiveServiceTests : IDisposable
         var result = await Service(repo, null, new MismatchingHashCalculator()).ArchiveAsync(file, CancellationToken.None);
         Assert.Equal(ArchiveOperationStatus.Error, result.Status); Assert.True(File.Exists(path)); Assert.Equal(InstallerStorageState.Active, repo.Files.Single().StorageState); Assert.Empty(Directory.Exists(Path.Combine(_folder, "Archive")) ? Directory.GetFiles(Path.Combine(_folder, "Archive"), "*", SearchOption.AllDirectories) : []);
     }
+    [Fact] public async Task QueuedCancellationNeverStartsSecondFilesystemOperation()
+    {
+        var source = Path.Combine(_folder, "queued"); Directory.CreateDirectory(source); await File.WriteAllTextAsync(Path.Combine(source, "one.exe"), "one"); await File.WriteAllTextAsync(Path.Combine(source, "two.exe"), "two");
+        var repo = new Repo(new ScanRoot(1, source, ScanRootPathKind.Absolute, true, true, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow)); var first = FileRecord() with { RelativePath="one.exe", FileName="one.exe" }; var second = FileRecord() with { Id=43, RelativePath="two.exe", FileName="two.exe" }; repo.Files.AddRange([first, second]); var fs = new BlockingFileSystem(); var service = Service(repo, fs);
+        var running = service.ArchiveAsync(first, CancellationToken.None); await fs.Started.Task; using var cancelled = new CancellationTokenSource(); var queued = service.ArchiveAsync(second, cancelled.Token); cancelled.Cancel(); await Assert.ThrowsAnyAsync<OperationCanceledException>(() => queued);
+        Assert.DoesNotContain(repo.Operations, operation => operation.InstallerId == second.Id); Assert.Equal(InstallerStorageState.Active, repo.Files.Single(file => file.Id == second.Id).StorageState); Assert.True(File.Exists(Path.Combine(source, "two.exe")));
+        fs.Release.TrySetResult(); Assert.Equal(ArchiveOperationStatus.Completed, (await running).Status);
+    }
     private InstallerArchiveService Service(Repo repo, IArchiveFileSystem? fileSystem = null, IFileHashCalculator? hashes = null) => new(repo,new Resolver(),new Locations(Path.Combine(_folder,"Archive")),hashes ?? new FileHashCalculator(), null, fileSystem);
     private static InstallerFile FileRecord() { var now=DateTimeOffset.UtcNow; return new InstallerFile(42,1,"tool.exe","tool.exe",".exe",7,now,null,now,now,true,ProductName:"Tool",ProductVersion:"1.0",NormalizedVersion:"1.0",ProductId:Guid.Parse("11111111-1111-1111-1111-111111111111")); }
     public void Dispose() { if(Directory.Exists(_folder)) Directory.Delete(_folder,true); }
@@ -108,6 +116,12 @@ public sealed class InstallerArchiveServiceTests : IDisposable
     private sealed class MismatchingHashCalculator : IFileHashCalculator
     {
         public Task<string> ComputeSha256Async(string path, CancellationToken token) => Task.FromResult(path.EndsWith(".archive-part", StringComparison.OrdinalIgnoreCase) ? "B" : "A");
+    }
+    private sealed class BlockingFileSystem : IArchiveFileSystem
+    {
+        private readonly SystemArchiveFileSystem _inner = new(); public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously); public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public bool Exists(string path) => _inner.Exists(path); public long GetLength(string path) => _inner.GetLength(path); public void CreateDirectory(string path) => _inner.CreateDirectory(path); public void Move(string source, string destination) => _inner.Move(source, destination); public void Delete(string path) => _inner.Delete(path);
+        public async Task CopyAsync(string source, string destination, IProgress<long>? progress, CancellationToken token) { await _inner.CopyAsync(source, destination, progress, token); Started.TrySetResult(); await Release.Task.WaitAsync(token); }
     }
     private sealed class Repo(ScanRoot root) : IScanCatalogRepository
     {
