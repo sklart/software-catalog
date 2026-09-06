@@ -91,6 +91,31 @@ public sealed class InstallerArchiveServiceTests : IDisposable
         Assert.DoesNotContain(repo.Operations, operation => operation.InstallerId == second.Id); Assert.Equal(InstallerStorageState.Active, repo.Files.Single(file => file.Id == second.Id).StorageState); Assert.True(File.Exists(Path.Combine(source, "two.exe")));
         fs.Release.TrySetResult(); Assert.Equal(ArchiveOperationStatus.Completed, (await running).Status);
     }
+    [Theory]
+    [InlineData("archive", "content", ArchiveOperationStatus.AlreadyExists)]
+    [InlineData("archive", "different", ArchiveOperationStatus.Conflict)]
+    [InlineData("trash", "content", ArchiveOperationStatus.AlreadyExists)]
+    [InlineData("trash", "different", ArchiveOperationStatus.Conflict)]
+    [InlineData("restore", "content", ArchiveOperationStatus.AlreadyExists)]
+    [InlineData("restore", "different", ArchiveOperationStatus.Conflict)]
+    public async Task CollisionsNeverOverwriteOrRelocateInstaller(string operation, string existingContent, ArchiveOperationStatus expected)
+    {
+        var source = Path.Combine(_folder, "collision-" + operation + "-" + existingContent); Directory.CreateDirectory(source); var originalPath = Path.Combine(source, "tool.exe"); await File.WriteAllTextAsync(originalPath, "content"); var repo = new Repo(new ScanRoot(1, source, ScanRootPathKind.Absolute, true, true, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow)); var file = FileRecord(); repo.Files.Add(file); var service = Service(repo);
+        ArchiveActionResult result;
+        if (operation == "archive")
+        {
+            var destination = Path.Combine(_folder, "Archive", "Tool-11111111", "1.0", "tool.exe"); Directory.CreateDirectory(Path.GetDirectoryName(destination)!); await File.WriteAllTextAsync(destination, existingContent); result = await service.ArchiveAsync(file, CancellationToken.None); Assert.True(File.Exists(originalPath));
+        }
+        else if (operation == "trash")
+        {
+            var destination = Path.Combine(_folder, "Archive", "Trash", "42", "tool.exe"); Directory.CreateDirectory(Path.GetDirectoryName(destination)!); await File.WriteAllTextAsync(destination, existingContent); result = await service.TrashAsync(file, CancellationToken.None); Assert.True(File.Exists(originalPath));
+        }
+        else
+        {
+            Assert.Equal(ArchiveOperationStatus.Completed, (await service.ArchiveAsync(file, CancellationToken.None)).Status); var archived = repo.Files.Single(); Directory.CreateDirectory(source); await File.WriteAllTextAsync(originalPath, existingContent); result = await service.RestoreAsync(archived, null, CancellationToken.None); Assert.Equal(InstallerStorageState.Archived, repo.Files.Single().StorageState);
+        }
+        Assert.Equal(expected, result.Status); Assert.Equal(existingContent, await File.ReadAllTextAsync(result.Operation.DestinationPath!));
+    }
     private InstallerArchiveService Service(Repo repo, IArchiveFileSystem? fileSystem = null, IFileHashCalculator? hashes = null) => new(repo,new Resolver(),new Locations(Path.Combine(_folder,"Archive")),hashes ?? new FileHashCalculator(), null, fileSystem);
     private static InstallerFile FileRecord() { var now=DateTimeOffset.UtcNow; return new InstallerFile(42,1,"tool.exe","tool.exe",".exe",7,now,null,now,now,true,ProductName:"Tool",ProductVersion:"1.0",NormalizedVersion:"1.0",ProductId:Guid.Parse("11111111-1111-1111-1111-111111111111")); }
     public void Dispose() { if(Directory.Exists(_folder)) Directory.Delete(_folder,true); }
