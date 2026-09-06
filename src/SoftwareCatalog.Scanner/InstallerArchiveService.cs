@@ -21,7 +21,21 @@ public sealed class InstallerArchiveService(IScanCatalogRepository repository, I
         {
             var source = await ResolvePathAsync(file, token); var op = NewOperation(file, ArchiveOperationType.Purge, source, null, null);
             await repository.SaveArchiveOperationAsync(op, token);
-            try { fileSystem.Delete(source); await repository.MarkInstallerPurgedAsync(file.Id, token); logger?.Information("archive", $"operation=Purge installerId={file.Id} status=completed"); return await CompleteAsync(op, ArchiveOperationStatus.Completed, null, token); }
+            var staging = source + ".purge-staging";
+            try
+            {
+                if (!fileSystem.Exists(source)) throw new FileNotFoundException("Файл корзины исчез до окончательного удаления.", source);
+                if (fileSystem.Exists(staging)) throw new IOException("Обнаружен незавершённый staging-файл очистки.");
+                fileSystem.Move(source, staging);
+                try { await repository.MarkInstallerPurgedAsync(file.Id, token); }
+                catch
+                {
+                    if (fileSystem.Exists(staging) && !fileSystem.Exists(source)) fileSystem.Move(staging, source);
+                    throw;
+                }
+                try { fileSystem.Delete(staging); logger?.Information("archive", $"operation=Purge installerId={file.Id} status=completed"); return await CompleteAsync(op, ArchiveOperationStatus.Completed, null, token); }
+                catch (Exception cleanupError) { logger?.Error("archive", $"operation=Purge installerId={file.Id} cleanup-error={cleanupError.Message}"); return await CompleteAsync(op, ArchiveOperationStatus.Error, cleanupError.Message, token); }
+            }
             catch (Exception ex) { logger?.Error("archive", $"operation=Purge installerId={file.Id} error={ex.Message}"); return await CompleteAsync(op, ArchiveOperationStatus.Error, ex.Message, token); }
         } finally { _gate.Release(); }
     }
