@@ -32,6 +32,22 @@ public sealed class InstallerRetentionPlannerTests
         var plan = _planner.CreatePlan([File(1,"1.0", state:InstallerStorageState.Archived), File(2,"2.0")], 1);
         Assert.Equal(RetentionAction.Keep, Item(plan,1).Action);
     }
+    [Fact] public void NormalizesZeroAndExcludesTrashAndNullHashes()
+    {
+        var plan = _planner.CreatePlan([File(1,"1.0"), File(2,"2.0"), File(3,"9.0",state:InstallerStorageState.Trashed)], 0);
+        Assert.Equal(1,plan.KeepLatestVersions); Assert.DoesNotContain(plan.Items,x=>x.Installer.Id==3); Assert.Equal(RetentionAction.Archive,Item(plan,1).Action);
+        Assert.Empty(new DuplicateInstallerService().Classify([File(4,"1.0"),File(5,"1.0")]));
+    }
+    [Fact] public void CanonicalDuplicatePrefersPinnedThenActiveThenArchived()
+    {
+        var service=new DuplicateInstallerService(); var copies=new[] { File(1,"1.0",sha:"A",state:InstallerStorageState.Trashed), File(2,"1.0",sha:"A",state:InstallerStorageState.Archived), File(3,"1.0",sha:"A"), File(4,"1.0",sha:"A",pinned:true,state:InstallerStorageState.Trashed) };
+        var classifications=service.Classify(copies); Assert.DoesNotContain(4L,classifications.Keys); Assert.Equal(RetentionAction.DuplicateCandidate,classifications[1]); Assert.Equal(RetentionAction.DuplicateCandidate,classifications[2]); Assert.Equal(RetentionAction.DuplicateCandidate,classifications[3]);
+    }
+    [Fact] public void ComputesKnownSpaceStatistics()
+    {
+        var stats=_planner.GetSpaceStatistics([File(1,"1.0",sha:"A") with { Size=10 },File(2,"1.0",sha:"A") with { Size=10 },File(3,"1.0",state:InstallerStorageState.Archived) with { Size=20 },File(4,"1.0",state:InstallerStorageState.Trashed) with { Size=30 }]);
+        Assert.Equal(70,stats.TotalBytes); Assert.Equal(20,stats.ActiveBytes); Assert.Equal(20,stats.ArchivedBytes); Assert.Equal(30,stats.TrashBytes); Assert.Equal(10,stats.DuplicateBytesPotentiallyRecoverable);
+    }
     [Fact] public void ClassifiesDuplicatesWithoutRiskingLastCopy()
     {
         var sameProduct = _planner.CreatePlan([File(1,"1.0",sha:"A"), File(2,"1.0",sha:"A")], 1);

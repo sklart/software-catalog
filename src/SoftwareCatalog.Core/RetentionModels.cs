@@ -12,7 +12,7 @@ public sealed class RetentionPlanItem(InstallerFile installer, RetentionAction a
 }
 public sealed record RetentionPlan(IReadOnlyList<RetentionPlanItem> Items, int KeepLatestVersions)
 {
-    public long EstimatedActiveSpaceFreed => Items.Where(x => x.Action is RetentionAction.Archive or RetentionAction.DuplicateCandidate).Sum(x => x.Installer.Size);
+    public long EstimatedActiveSpaceFreed => Items.Where(x => x.Action == RetentionAction.Archive).Sum(x => x.Installer.Size);
 }
 public sealed record CatalogSpaceStatistics(long TotalBytes, long ActiveBytes, long ArchivedBytes, long TrashBytes, long DuplicateBytesPotentiallyRecoverable);
 

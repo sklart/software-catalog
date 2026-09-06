@@ -26,7 +26,7 @@ public sealed class InstallerArchiveService(IScanCatalogRepository repository, I
     }
     private async Task<ArchiveActionResult> MoveAsync(InstallerFile file, InstallerStorageState state, string? alternateDestination, CancellationToken token)
     {
-        if (file.IsPinned) return await FinishAsync(file, state == InstallerStorageState.Archived ? ArchiveOperationType.Archive : state == InstallerStorageState.Trashed ? ArchiveOperationType.MoveToTrash : ArchiveOperationType.Restore, null, null, ArchiveOperationStatus.Error, "Закреплённый файл сначала необходимо открепить.", token);
+        if (file.IsPinned && state != InstallerStorageState.Active) return await FinishAsync(file, state == InstallerStorageState.Archived ? ArchiveOperationType.Archive : ArchiveOperationType.MoveToTrash, null, null, ArchiveOperationStatus.Error, "Закреплённый файл сначала необходимо открепить.", token);
         if (!file.Exists) return await FinishAsync(file, ArchiveOperationType.Archive, null, null, ArchiveOperationStatus.Error, "Исходный файл не найден в каталоге.", token);
         await _gate.WaitAsync(token); try
         {
@@ -45,7 +45,8 @@ public sealed class InstallerArchiveService(IScanCatalogRepository repository, I
                     await CopyAsync(source, part, token);
                     if (new FileInfo(source).Length != new FileInfo(part).Length || !string.Equals(sourceHash, await hashes.ComputeSha256Async(part, token), StringComparison.OrdinalIgnoreCase)) throw new IOException("Проверка SHA-256 после копирования не пройдена.");
                     File.Move(part, destination, false);
-                    var root = state == InstallerStorageState.Active ? (await repository.GetScanRootsAsync(token)).Single(x => x.Id == file.OriginalScanRootId) : await GetManagedRootAsync(state, token); var relative = Path.GetRelativePath(paths.Resolve(root), destination);
+                    var root = state == InstallerStorageState.Active ? await GetRestoreRootAsync(file, destination, alternateDestination, token) : await GetManagedRootAsync(state, token); var relative = Path.GetRelativePath(paths.Resolve(root), destination);
+                    if (Path.IsPathRooted(relative) || relative == ".." || relative.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal)) throw new InvalidOperationException("Путь восстановления находится вне выбранного user root.");
                     var originalRoot = file.OriginalScanRootId ?? (file.StorageState == InstallerStorageState.Active ? file.ScanRootId : null);
                     var originalPath = file.OriginalRelativePath ?? (file.StorageState == InstallerStorageState.Active ? file.RelativePath : null);
                     if (state == InstallerStorageState.Active) { originalRoot = null; originalPath = null; }
@@ -63,6 +64,14 @@ public sealed class InstallerArchiveService(IScanCatalogRepository repository, I
     private static async Task CopyAsync(string source, string destination, CancellationToken token) { await using var input = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, FileOptions.Asynchronous); await using var output = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, FileOptions.Asynchronous); await input.CopyToAsync(output, token); await output.FlushAsync(token); }
     private async Task<string> ResolvePathAsync(InstallerFile file, CancellationToken token) { var root = (await repository.GetScanRootsAsync(token)).Single(x => x.Id == file.ScanRootId); return Path.GetFullPath(Path.Combine(paths.Resolve(root), file.RelativePath)); }
     private async Task<ScanRoot> GetManagedRootAsync(InstallerStorageState state, CancellationToken token) => state switch { InstallerStorageState.Archived => await repository.EnsureManagedScanRootAsync(ScanRootRole.Archive, locations.ArchiveStoredPath, locations.PathKind, token), InstallerStorageState.Trashed => await repository.EnsureManagedScanRootAsync(ScanRootRole.Trash, locations.PathKind == ScanRootPathKind.Absolute ? locations.TrashRoot : Path.Combine(locations.ArchiveStoredPath, "Trash"), locations.PathKind, token), _ => throw new InvalidOperationException("Managed root requested for active storage.") };
+    private async Task<ScanRoot> GetRestoreRootAsync(InstallerFile file, string destination, string? alternate, CancellationToken token)
+    {
+        var roots = await repository.GetScanRootsAsync(token);
+        if (string.IsNullOrWhiteSpace(alternate)) return roots.Single(x => x.Id == file.OriginalScanRootId && x.Role == ScanRootRole.User);
+        var match = roots.Where(x => x.Role == ScanRootRole.User).Select(x => (Root: x, Full: paths.Resolve(x))).FirstOrDefault(x => IsInside(x.Full, destination)).Root;
+        return match ?? await repository.AddScanRootAsync(Path.GetDirectoryName(destination)!, ScanRootPathKind.Absolute, true, token);
+    }
+    private static bool IsInside(string root, string path) { var relative = Path.GetRelativePath(root, path); return !Path.IsPathRooted(relative) && relative != ".." && !relative.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal); }
     private async Task<string> GetDestinationAsync(InstallerFile file, InstallerStorageState state, string? alternate, CancellationToken token)
     {
         if (state == InstallerStorageState.Archived) return Path.Combine(locations.ArchiveRoot, Safe(file.ProductName ?? "unknown") + "-" + (file.ProductId?.ToString("N")[..8] ?? "unlinked"), Safe(file.NormalizedVersion ?? file.ProductVersion ?? "unknown"), Safe(file.FileName));
