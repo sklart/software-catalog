@@ -63,6 +63,26 @@ public sealed class InstallerArchiveServiceTests : IDisposable
         var result=await Service(repo).ArchiveAsync(file,CancellationToken.None,new Progress<ArchiveProgress>(reported.Add));
         Assert.Equal(ArchiveOperationStatus.Completed,result.Status); Assert.Contains(reported, item => item.BytesProcessed > 0 && item.Status == ArchiveOperationStatus.Running); Assert.Equal(150_000,reported.Last().BytesProcessed);
     }
+    [Fact] public async Task SourceDisappearanceAndPurgeGuardsAreRecordedWithoutChangingState()
+    {
+        var source = Path.Combine(_folder, "guards"); Directory.CreateDirectory(source); var path = Path.Combine(source, "tool.exe"); await File.WriteAllTextAsync(path, "content"); var repo = new Repo(new ScanRoot(1, source, ScanRootPathKind.Absolute, true, true, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow)); var active = FileRecord(); repo.Files.Add(active); var service = Service(repo);
+        File.Delete(path); var missing = await service.ArchiveAsync(active, CancellationToken.None); Assert.Equal(ArchiveOperationStatus.Error, missing.Status); Assert.Equal(InstallerStorageState.Active, repo.Files.Single().StorageState); Assert.Equal(ArchiveOperationStatus.Error, repo.Operations.Last().Status);
+        Assert.Equal(ArchiveOperationStatus.Error, (await service.PurgeAsync(active, CancellationToken.None)).Status);
+        repo.Files[0] = active with { StorageState = InstallerStorageState.Archived }; Assert.Equal(ArchiveOperationStatus.Error, (await service.PurgeAsync(repo.Files.Single(), CancellationToken.None)).Status);
+        repo.Files[0] = active with { StorageState = InstallerStorageState.Trashed, IsPinned = true }; Assert.Equal(ArchiveOperationStatus.Error, (await service.PurgeAsync(repo.Files.Single(), CancellationToken.None)).Status);
+    }
+    [Fact] public async Task TrashRestoreLifecyclePreservesIdentityMetadataAndHash()
+    {
+        var source = Path.Combine(_folder, "trash-restore"); Directory.CreateDirectory(source); var path = Path.Combine(source, "tool.exe"); await File.WriteAllTextAsync(path, "content"); var repo = new Repo(new ScanRoot(1, source, ScanRootPathKind.Absolute, true, true, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow)); var original = FileRecord() with { Architecture = "x64", MetadataError = "metadata" }; repo.Files.Add(original); var service = Service(repo);
+        Assert.Equal(ArchiveOperationStatus.Completed, (await service.TrashAsync(original, CancellationToken.None)).Status); var trashed = repo.Files.Single(); Assert.Equal(ArchiveOperationStatus.Completed, (await service.RestoreAsync(trashed, null, CancellationToken.None)).Status); var restored = repo.Files.Single();
+        Assert.Equal(original.Id, restored.Id); Assert.Equal(original.ProductId, restored.ProductId); Assert.Equal(trashed.Sha256, restored.Sha256); Assert.NotNull(restored.Sha256); Assert.Equal(original.Architecture, restored.Architecture); Assert.Equal(original.MetadataError, restored.MetadataError); Assert.Equal(InstallerStorageState.Active, restored.StorageState); Assert.True(File.Exists(path));
+    }
+    [Fact] public async Task HashMismatchRemovesTemporaryCopyAndKeepsSource()
+    {
+        var source = Path.Combine(_folder, "hash-mismatch"); Directory.CreateDirectory(source); var path = Path.Combine(source, "tool.exe"); await File.WriteAllTextAsync(path, "content"); var repo = new Repo(new ScanRoot(1, source, ScanRootPathKind.Absolute, true, true, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow)); var file = FileRecord(); repo.Files.Add(file);
+        var result = await Service(repo, null, new MismatchingHashCalculator()).ArchiveAsync(file, CancellationToken.None);
+        Assert.Equal(ArchiveOperationStatus.Error, result.Status); Assert.True(File.Exists(path)); Assert.Equal(InstallerStorageState.Active, repo.Files.Single().StorageState); Assert.Empty(Directory.Exists(Path.Combine(_folder, "Archive")) ? Directory.GetFiles(Path.Combine(_folder, "Archive"), "*", SearchOption.AllDirectories) : []);
+    }
     private InstallerArchiveService Service(Repo repo, IArchiveFileSystem? fileSystem = null, IFileHashCalculator? hashes = null) => new(repo,new Resolver(),new Locations(Path.Combine(_folder,"Archive")),hashes ?? new FileHashCalculator(), null, fileSystem);
     private static InstallerFile FileRecord() { var now=DateTimeOffset.UtcNow; return new InstallerFile(42,1,"tool.exe","tool.exe",".exe",7,now,null,now,now,true,ProductName:"Tool",ProductVersion:"1.0",NormalizedVersion:"1.0",ProductId:Guid.Parse("11111111-1111-1111-1111-111111111111")); }
     public void Dispose() { if(Directory.Exists(_folder)) Directory.Delete(_folder,true); }
@@ -84,6 +104,10 @@ public sealed class InstallerArchiveServiceTests : IDisposable
         }
         public void Move(string source, string destination) { if (failure == Failure.Move) throw new IOException("finalize failure"); _inner.Move(source, destination); }
         public void Delete(string path) { if (failure == Failure.DeleteSource && !_deleteFailed) { _deleteFailed = true; throw new IOException("source delete failure"); } _inner.Delete(path); }
+    }
+    private sealed class MismatchingHashCalculator : IFileHashCalculator
+    {
+        public Task<string> ComputeSha256Async(string path, CancellationToken token) => Task.FromResult(path.EndsWith(".archive-part", StringComparison.OrdinalIgnoreCase) ? "B" : "A");
     }
     private sealed class Repo(ScanRoot root) : IScanCatalogRepository
     {
