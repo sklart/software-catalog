@@ -9,7 +9,7 @@ namespace SoftwareCatalog.Providers;
 public interface IWinGetClient { Task<WinGetPackage?> ShowAsync(string packageId, CancellationToken cancellationToken); Task<IReadOnlyList<WinGetPackage>> SearchAsync(string name, CancellationToken cancellationToken); Task<IReadOnlyList<WinGetInstaller>> GetInstallersAsync(string packageId, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyList<WinGetInstaller>>([]); }
 public sealed record WinGetPackage(string Id, string Name, string? Publisher, string Version);
 public sealed record WinGetInstaller(string? InstallerUrl, string? InstallerSha256, string? Architecture, string? InstallerType, string? Scope = null, string? Locale = null);
-public sealed class WinGetProvider(IWinGetClient client, ProductNormalizer normalizer) : IUpdateProvider, IUpdateDownloadProvider
+public sealed class WinGetProvider(IWinGetClient client, ProductNormalizer normalizer) : IUpdateProvider, IUpdateDownloadProvider, IUpdateCandidateProvider
 {
     public string Id => "WinGet";
     public bool CanHandle(SoftwareProduct product, ProductUpdateSource? source) => source is null || (source.Enabled && source.ProviderType.Equals(Id, StringComparison.OrdinalIgnoreCase));
@@ -29,6 +29,18 @@ public sealed class WinGetProvider(IWinGetClient client, ProductNormalizer norma
         if (package is null) return new(UpdateStatus.NotFound, Source: Id, ExternalProductId: source.ExternalId);
         if (normalizer.Normalize(package.Name) != product.NormalizedName || (!string.IsNullOrWhiteSpace(product.Publisher) && !string.IsNullOrWhiteSpace(package.Publisher) && normalizer.Normalize(product.Publisher) != normalizer.Normalize(package.Publisher))) return new(UpdateStatus.Ambiguous, Source: Id, ExternalProductId: source.ExternalId, Error: "WinGet package does not conclusively match product");
         return new(UpdateStatus.Unknown, package.Version, normalizer.NormalizeVersion(package.Version), package.Name, null, null, Id, package.Id);
+    }
+    public async Task<IReadOnlyList<UpdateCandidate>> SearchCandidatesAsync(SoftwareProduct product, IReadOnlyList<ProductAlias> aliases, CancellationToken token)
+    {
+        var names = new[] { product.CanonicalName }.Concat(aliases.Select(x => x.Alias)).Distinct(StringComparer.OrdinalIgnoreCase);
+        var packages = (await Task.WhenAll(names.Select(x => client.SearchAsync(x, token)))).SelectMany(x => x).GroupBy(x => x.Id, StringComparer.OrdinalIgnoreCase).Select(x => x.First());
+        return packages.Select(candidate =>
+        {
+            var exactName = normalizer.Normalize(candidate.Name) == product.NormalizedName || aliases.Any(a => normalizer.Normalize(candidate.Name) == a.NormalizedAlias);
+            var publisher = !string.IsNullOrWhiteSpace(product.Publisher) && !string.IsNullOrWhiteSpace(candidate.Publisher) && normalizer.Normalize(product.Publisher) == normalizer.Normalize(candidate.Publisher);
+            var confidence = exactName && publisher ? MappingConfidence.Exact : exactName ? MappingConfidence.High : publisher ? MappingConfidence.Medium : MappingConfidence.Low;
+            return new UpdateCandidate(Id, candidate.Id, candidate.Name, candidate.Publisher, candidate.Version, confidence, publisher ? "точное имя и издатель" : exactName ? "точное имя или alias" : "похожий результат поиска");
+        }).OrderBy(x => x.Confidence).ToArray();
     }
     public async Task<DownloadCandidateResolution> ResolveAsync(SoftwareProduct product, ProductUpdateSource source, UpdateCheckResult? update, CancellationToken token)
     {

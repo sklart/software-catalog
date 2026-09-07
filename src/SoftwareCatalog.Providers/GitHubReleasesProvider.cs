@@ -6,7 +6,7 @@ using SoftwareCatalog.Core.Domain;
 
 namespace SoftwareCatalog.Providers;
 
-public sealed class GitHubReleasesProvider(HttpClient client, ProductNormalizer normalizer) : IUpdateProvider, IUpdateDownloadProvider
+public sealed class GitHubReleasesProvider(HttpClient client, ProductNormalizer normalizer) : IUpdateProvider, IUpdateDownloadProvider, IUpdateCandidateProvider
 {
     public string Id => "GitHub";
     public bool CanHandle(SoftwareProduct product, ProductUpdateSource? source) => source?.Enabled == true && source.ProviderType.Equals(Id, StringComparison.OrdinalIgnoreCase);
@@ -31,6 +31,11 @@ public sealed class GitHubReleasesProvider(HttpClient client, ProductNormalizer 
         }
     }
     private static bool IsRepository(string value) => value.Split('/').Length == 2 && !value.Contains(' ');
+    public async Task<IReadOnlyList<UpdateCandidate>> SearchCandidatesAsync(SoftwareProduct product, IReadOnlyList<ProductAlias> aliases, CancellationToken token)
+    {
+        var query = Uri.EscapeDataString(product.CanonicalName + (string.IsNullOrWhiteSpace(product.Publisher) ? "" : " user:" + product.Publisher));
+        try { using var response = await client.GetAsync($"search/repositories?q={query}&per_page=10", token); if (!response.IsSuccessStatusCode) return []; var result = await response.Content.ReadFromJsonAsync<SearchResult>(cancellationToken: token); return (result?.items ?? []).Select(x => { var name = x.name ?? ""; var match = normalizer.Normalize(name) == product.NormalizedName || aliases.Any(a => normalizer.Normalize(name) == a.NormalizedAlias); var owner = x.owner?.login; var publisher = !string.IsNullOrWhiteSpace(product.Publisher) && string.Equals(owner, product.Publisher, StringComparison.OrdinalIgnoreCase); return new UpdateCandidate(Id, x.full_name ?? "", x.full_name ?? name, owner, null, match && publisher ? MappingConfidence.High : match ? MappingConfidence.Medium : MappingConfidence.Low, publisher ? "имя репозитория и владелец" : match ? "имя репозитория или alias" : "результат GitHub поиска"); }).Where(x => IsRepository(x.ExternalId)).OrderBy(x => x.Confidence).ToArray(); } catch (HttpRequestException) { return []; }
+    }
     public async Task<DownloadCandidateResolution> ResolveAsync(SoftwareProduct product, ProductUpdateSource source, UpdateCheckResult? update, CancellationToken token)
     {
         if (!IsRepository(source.ExternalId)) return new(DownloadCandidateStatus.NotFound, [], "GitHub repository is not configured");
@@ -54,4 +59,7 @@ public sealed class GitHubReleasesProvider(HttpClient client, ProductNormalizer 
     private static string? Architecture(string? name) => name?.Contains("arm64", StringComparison.OrdinalIgnoreCase) == true ? "arm64" : name?.Contains("x64", StringComparison.OrdinalIgnoreCase) == true || name?.Contains("amd64", StringComparison.OrdinalIgnoreCase) == true ? "x64" : name?.Contains("x86", StringComparison.OrdinalIgnoreCase) == true ? "x86" : null;
     private sealed record Release(string? tag_name, string? name, DateTimeOffset? published_at, string? html_url, Asset[]? assets = null);
     private sealed record Asset(string? name, string? browser_download_url, long? size, string? content_type);
+    private sealed record SearchResult(SearchRepository[]? items);
+    private sealed record SearchRepository(string? full_name, string? name, SearchOwner? owner);
+    private sealed record SearchOwner(string? login);
 }

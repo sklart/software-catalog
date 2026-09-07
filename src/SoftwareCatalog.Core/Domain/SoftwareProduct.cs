@@ -4,6 +4,8 @@ public enum ProductMatchSource { MsiUpgradeCode, MsiProductCode, MsixIdentity, N
 public enum ProductMatchConfidence { High, Medium, Low }
 public enum UpdateStatus { Unknown, Checking, UpToDate, UpdateAvailable, LocalNewer, Ambiguous, NotFound, Error }
 public enum VersionComparisonResult { Older, Equal, Newer, Unknown }
+public enum MappingConfidence { Exact, High, Medium, Low, Ambiguous }
+public enum MappingSource { Manual, Imported, ExactMatch, NormalizedName, PublisherName, ProviderSearch }
 
 public sealed record SoftwareProduct(
     Guid Id,
@@ -21,5 +23,7 @@ public sealed record SoftwareProduct(
     DateTimeOffset? LastCheckedUtc = null,
     string? UpdateError = null);
 
-public sealed record ProductUpdateSource(Guid Id, Guid ProductId, string ProviderType, string ExternalId, bool Enabled = true, bool IsExplicit = false);
+public sealed record ProductUpdateSource(Guid Id, Guid ProductId, string ProviderType, string ExternalId, bool Enabled = true, bool IsExplicit = false, MappingSource Source = MappingSource.Manual, MappingConfidence Confidence = MappingConfidence.Exact, DateTimeOffset? CreatedUtc = null, DateTimeOffset? UpdatedUtc = null);
+public sealed record ProductAlias(Guid ProductId, string Alias, string NormalizedAlias, MappingSource Source = MappingSource.ProviderSearch);
+public sealed record UpdateCandidate(string ProviderType, string ExternalId, string DisplayName, string? PublisherOrOwner, string? LatestVersion, MappingConfidence Confidence, string Reason);
 public sealed record UpdateCheckResult(UpdateStatus Status, string? LatestVersion = null, string? LatestNormalizedVersion = null, string? ReleaseName = null, DateTimeOffset? ReleaseDate = null, Uri? DownloadPageUrl = null, string? Source = null, string? ExternalProductId = null, string? Error = null, DateTimeOffset? CheckedUtc = null);
