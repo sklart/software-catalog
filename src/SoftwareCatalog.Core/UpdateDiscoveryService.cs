@@ -14,11 +14,13 @@ public sealed class UpdateDiscoveryService(IProductCatalogRepository repository,
         var sources = await repository.GetUpdateSourcesAsync(product.Id, cancellationToken);
         var orderedSources = sources.Where(s => s.Enabled && (s.IsExplicit || s.Confidence is MappingConfidence.Exact or MappingConfidence.High)).OrderByDescending(s => s.IsExplicit).ThenBy(s => Rank(s.ProviderType)).ToList();
         UpdateCheckResult? lastFailure = null;
+        UpdateCheckResult? lastAmbiguous = null;
         foreach (var source in orderedSources)
         {
             var outcome = await TryProvider(product, source, cancellationToken);
             if (outcome?.Status == UpdateStatus.Error) lastFailure = outcome;
-            if (outcome is { Status: not UpdateStatus.NotFound and not UpdateStatus.Error }) return await PersistCompared(product, outcome, cancellationToken);
+            if (outcome?.Status == UpdateStatus.Ambiguous) lastAmbiguous = outcome;
+            if (outcome is { Status: not UpdateStatus.NotFound and not UpdateStatus.Error and not UpdateStatus.Ambiguous }) return await PersistCompared(product, outcome, cancellationToken);
             if (source.ProviderType.Equals("GitHub", StringComparison.OrdinalIgnoreCase) && outcome?.Status == UpdateStatus.NotFound)
             {
                 var tags = providers.FirstOrDefault(x => x.Id.Equals("GitHubTags", StringComparison.OrdinalIgnoreCase));
@@ -30,6 +32,7 @@ public sealed class UpdateDiscoveryService(IProductCatalogRepository repository,
             if (!provider.CanHandle(product, null)) continue;
             var outcome=await TryProvider(product,null,cancellationToken,provider);
             if (outcome?.Status == UpdateStatus.Error) lastFailure = outcome;
+            if (outcome?.Status == UpdateStatus.Ambiguous) lastAmbiguous = outcome;
             if(outcome is { Status: not UpdateStatus.NotFound and not UpdateStatus.Error and not UpdateStatus.Ambiguous })
             {
                 if(outcome.Status==UpdateStatus.Unknown && !string.IsNullOrWhiteSpace(outcome.ExternalProductId)) await repository.SetUpdateSourceAsync(new ProductUpdateSource(Guid.NewGuid(),product.Id,provider.Id,outcome.ExternalProductId,true,false,MappingSource.ExactMatch,MappingConfidence.Exact),cancellationToken);
@@ -43,11 +46,11 @@ public sealed class UpdateDiscoveryService(IProductCatalogRepository repository,
             var source=new ProductUpdateSource(Guid.NewGuid(),product.Id,"GitHub",githubCandidates[0].ExternalId,true,false,MappingSource.ProviderSearch,githubCandidates[0].Confidence);
             var outcome=await TryProvider(product,source,cancellationToken);
             if(outcome?.Status==UpdateStatus.NotFound) { var tags=providers.FirstOrDefault(x=>x.Id.Equals("GitHubTags",StringComparison.OrdinalIgnoreCase)); if(tags is not null) outcome=await TryProvider(product,source with { ProviderType="GitHubTags" },cancellationToken,tags); }
-            if(outcome is { Status: not UpdateStatus.NotFound and not UpdateStatus.Error }) { await repository.SetUpdateSourceAsync(source,cancellationToken); return await PersistCompared(product,outcome,cancellationToken); }
+            if(outcome is { Status: not UpdateStatus.NotFound and not UpdateStatus.Error and not UpdateStatus.Ambiguous }) { await repository.SetUpdateSourceAsync(source,cancellationToken); return await PersistCompared(product,outcome,cancellationToken); }
             if(outcome?.Status==UpdateStatus.Error) lastFailure=outcome;
         }
         if(githubCandidates.Length>1) return await Persist(product.Id,new(UpdateStatus.Ambiguous,Source:"GitHub",Error:"Multiple high-confidence GitHub candidates",CheckedUtc:DateTimeOffset.UtcNow,ErrorKind:ProviderErrorKind.Ambiguous),cancellationToken);
-        return await Persist(product.Id,lastFailure ?? new(UpdateStatus.NotFound,Error:"No reliable update source configured",CheckedUtc:DateTimeOffset.UtcNow,ErrorKind:ProviderErrorKind.NotFound),cancellationToken);
+        return await Persist(product.Id,lastFailure ?? lastAmbiguous ?? new(UpdateStatus.NotFound,Error:"No reliable update source configured",CheckedUtc:DateTimeOffset.UtcNow,ErrorKind:ProviderErrorKind.NotFound),cancellationToken);
     }
     private async Task<UpdateCheckResult> Persist(Guid id, UpdateCheckResult result, CancellationToken token) { await repository.SaveUpdateCheckAsync(id, result, token); return result; }
     private static int Rank(string id) { var rank=Array.FindIndex(Priority,x=>x.Equals(id,StringComparison.OrdinalIgnoreCase)); return rank<0?int.MaxValue:rank; }

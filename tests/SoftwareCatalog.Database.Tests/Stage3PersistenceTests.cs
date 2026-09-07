@@ -38,4 +38,20 @@ public sealed class Stage3PersistenceTests : IAsyncLifetime
         var source=Assert.Single(await _database.GetUpdateSourcesAsync(product.Id,CancellationToken.None)); Assert.NotNull(source.CreatedUtc); Assert.NotNull(source.UpdatedUtc); Assert.Equal(MappingConfidence.High,source.Confidence); Assert.Equal(MappingSource.ExactMatch,source.Source);
         var reopened=new CatalogDatabase(Path.Combine(_folder,"catalog.db")); await reopened.InitializeAsync(CancellationToken.None); var restored=Assert.Single(await reopened.GetUpdateSourcesAsync(product.Id,CancellationToken.None)); Assert.Equal(source.CreatedUtc,restored.CreatedUtc); Assert.Equal(source.UpdatedUtc,restored.UpdatedUtc); Assert.Equal("Legacy Tool",Assert.Single(await reopened.GetProductAliasesAsync(product.Id,CancellationToken.None)).Alias);
     }
+    [Fact]
+    public async Task CandidateCacheHonorsTtlForPositiveAndNegativeResults()
+    {
+        var product=await _database.UpsertProductAsync(new SoftwareProduct(Guid.NewGuid(),"Tool",null,"tool",DateTimeOffset.UtcNow,DateTimeOffset.UtcNow),CancellationToken.None);
+        var candidate=new UpdateCandidate("GitHub","owner/tool","Tool","owner",null,MappingConfidence.High,"exact");
+        await _database.SaveUpdateCandidatesAsync(product.Id,[candidate],DateTimeOffset.UtcNow,CancellationToken.None);
+        Assert.True(await _database.IsUpdateCandidateCacheFreshAsync(product.Id,1,CancellationToken.None));
+        Assert.Equal(candidate,Assert.Single(await _database.SearchUpdateCandidatesAsync(product.Id,false,1,CancellationToken.None)));
+        await _database.SaveUpdateCandidatesAsync(product.Id,[candidate],DateTimeOffset.UtcNow.AddHours(-2),CancellationToken.None);
+        Assert.False(await _database.IsUpdateCandidateCacheFreshAsync(product.Id,1,CancellationToken.None));
+        Assert.Empty(await _database.SearchUpdateCandidatesAsync(product.Id,false,1,CancellationToken.None));
+        Assert.Empty(await _database.SearchUpdateCandidatesAsync(product.Id,true,1,CancellationToken.None));
+        await _database.SaveUpdateCandidatesAsync(product.Id,[],DateTimeOffset.UtcNow,CancellationToken.None);
+        Assert.True(await _database.IsUpdateCandidateCacheFreshAsync(product.Id,1,CancellationToken.None));
+        Assert.Empty(await _database.SearchUpdateCandidatesAsync(product.Id,false,1,CancellationToken.None));
+    }
 }
