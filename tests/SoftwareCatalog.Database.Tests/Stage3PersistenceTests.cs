@@ -29,4 +29,13 @@ public sealed class Stage3PersistenceTests : IAsyncLifetime
         var saved = Assert.Single(await _database.GetProductsAsync(CancellationToken.None)); Assert.Equal(UpdateStatus.UpdateAvailable, saved.UpdateStatus); Assert.Equal("2.0", saved.LatestVersion); Assert.Equal("2.0", saved.LatestNormalizedVersion); Assert.Equal("GitHub", saved.UpdateProvider); Assert.Equal("owner/repo", saved.ExternalProductId); Assert.Equal("brief", saved.UpdateError); Assert.Equal(now, saved.LastCheckedUtc);
         await _database.ClearUpdateSourcesAsync(product.Id, "GitHub", CancellationToken.None); Assert.Empty(await _database.GetUpdateSourcesAsync(product.Id, CancellationToken.None));
     }
+    [Fact]
+    public async Task MappingTimestampsAndAliasesSurviveRestart()
+    {
+        var now=DateTimeOffset.Parse("2026-01-02T03:04:05Z"); var product=await _database.UpsertProductAsync(new SoftwareProduct(Guid.NewGuid(),"Tool","Publisher","tool",now,now),CancellationToken.None);
+        await _database.SetUpdateSourceAsync(new ProductUpdateSource(Guid.NewGuid(),product.Id,"WinGet","Vendor.Tool",true,false,MappingSource.ExactMatch,MappingConfidence.High,now),CancellationToken.None);
+        await _database.SetProductAliasAsync(new ProductAlias(product.Id,"Legacy Tool","legacytool",MappingSource.Manual),CancellationToken.None);
+        var source=Assert.Single(await _database.GetUpdateSourcesAsync(product.Id,CancellationToken.None)); Assert.NotNull(source.CreatedUtc); Assert.NotNull(source.UpdatedUtc); Assert.Equal(MappingConfidence.High,source.Confidence); Assert.Equal(MappingSource.ExactMatch,source.Source);
+        var reopened=new CatalogDatabase(Path.Combine(_folder,"catalog.db")); await reopened.InitializeAsync(CancellationToken.None); var restored=Assert.Single(await reopened.GetUpdateSourcesAsync(product.Id,CancellationToken.None)); Assert.Equal(source.CreatedUtc,restored.CreatedUtc); Assert.Equal(source.UpdatedUtc,restored.UpdatedUtc); Assert.Equal("Legacy Tool",Assert.Single(await reopened.GetProductAliasesAsync(product.Id,CancellationToken.None)).Alias);
+    }
 }

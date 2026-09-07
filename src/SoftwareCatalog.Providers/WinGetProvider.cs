@@ -33,7 +33,8 @@ public sealed class WinGetProvider(IWinGetClient client, ProductNormalizer norma
     public async Task<IReadOnlyList<UpdateCandidate>> SearchCandidatesAsync(SoftwareProduct product, IReadOnlyList<ProductAlias> aliases, CancellationToken token)
     {
         var names = new[] { product.CanonicalName }.Concat(aliases.Select(x => x.Alias)).Distinct(StringComparer.OrdinalIgnoreCase);
-        var packages = (await Task.WhenAll(names.Select(x => client.SearchAsync(x, token)))).SelectMany(x => x).GroupBy(x => x.Id, StringComparer.OrdinalIgnoreCase).Select(x => x.First());
+        var found = (await Task.WhenAll(names.Select(x => client.SearchAsync(x, token)))).SelectMany(x => x).GroupBy(x => x.Id, StringComparer.OrdinalIgnoreCase).Select(x => x.First()).ToArray();
+        var packages = await Task.WhenAll(found.Select(async candidate => await client.ShowAsync(candidate.Id, token) ?? candidate));
         return packages.Select(candidate =>
         {
             var exactName = normalizer.Normalize(candidate.Name) == product.NormalizedName || aliases.Any(a => normalizer.Normalize(candidate.Name) == a.NormalizedAlias);

@@ -12,31 +12,43 @@ public sealed class UpdateDiscoveryService(IProductCatalogRepository repository,
     {
         if (!force && product.LastCheckedUtc is { } checkedUtc && checkedUtc > DateTimeOffset.UtcNow.AddHours(-cacheHours)) return new(product.UpdateStatus, product.LatestVersion, product.LatestNormalizedVersion, Source: product.UpdateProvider, ExternalProductId: product.ExternalProductId, Error: product.UpdateError, CheckedUtc: checkedUtc);
         var sources = await repository.GetUpdateSourcesAsync(product.Id, cancellationToken);
-        var selected = sources.Where(s => s.Enabled).OrderByDescending(s => s.IsExplicit).ThenBy(s => Array.FindIndex(Priority, p => p.Equals(s.ProviderType, StringComparison.OrdinalIgnoreCase)) is var rank && rank >= 0 ? rank : int.MaxValue).ThenBy(s => s.ProviderType, StringComparer.Ordinal).FirstOrDefault();
-        var provider = selected is null ? providers.OrderBy(p => Array.FindIndex(Priority, x => x.Equals(p.Id, StringComparison.OrdinalIgnoreCase)) is var rank && rank >= 0 ? rank : int.MaxValue).FirstOrDefault(p => p.CanHandle(product, null)) : providers.FirstOrDefault(p => p.CanHandle(product, selected));
-        if (provider is null) return await Persist(product.Id, new(UpdateStatus.NotFound, Error: "No update source configured", CheckedUtc: DateTimeOffset.UtcNow), cancellationToken);
-        try
+        var orderedSources = sources.Where(s => s.Enabled && (s.IsExplicit || s.Confidence is MappingConfidence.Exact or MappingConfidence.High)).OrderByDescending(s => s.IsExplicit).ThenBy(s => Rank(s.ProviderType)).ToList();
+        UpdateCheckResult? lastFailure = null;
+        foreach (var source in orderedSources)
         {
-            var result = await provider.CheckLatestAsync(product, selected, cancellationToken);
-            if (selected is null && result.Status == UpdateStatus.Unknown && !string.IsNullOrWhiteSpace(result.ExternalProductId)) await repository.SetUpdateSourceAsync(new ProductUpdateSource(Guid.NewGuid(), product.Id, provider.Id, result.ExternalProductId, true, false, MappingSource.ExactMatch, MappingConfidence.Exact), cancellationToken);
-            if (result.Status == UpdateStatus.Unknown && result.LatestNormalizedVersion is not null)
+            var outcome = await TryProvider(product, source, cancellationToken);
+            if (outcome?.Status == UpdateStatus.Error) lastFailure = outcome;
+            if (outcome is { Status: not UpdateStatus.NotFound and not UpdateStatus.Error }) return await PersistCompared(product, outcome, cancellationToken);
+            if (source.ProviderType.Equals("GitHub", StringComparison.OrdinalIgnoreCase) && outcome?.Status == UpdateStatus.NotFound)
             {
-                result = result with { Status = comparer.Compare(product.LatestNormalizedVersion ?? product.LatestLocalVersion, result.LatestNormalizedVersion) switch { VersionComparisonResult.Older => UpdateStatus.UpdateAvailable, VersionComparisonResult.Equal => UpdateStatus.UpToDate, VersionComparisonResult.Newer => UpdateStatus.LocalNewer, _ => UpdateStatus.Unknown } };
+                var tags = providers.FirstOrDefault(x => x.Id.Equals("GitHubTags", StringComparison.OrdinalIgnoreCase));
+                if (tags is not null) { var tagResult=await TryProvider(product, source with { ProviderType="GitHubTags" }, cancellationToken); if(tagResult is { Status: not UpdateStatus.NotFound and not UpdateStatus.Error }) return await PersistCompared(product,tagResult,cancellationToken); }
             }
-            return await Persist(product.Id, result with { CheckedUtc = DateTimeOffset.UtcNow, Source = provider.Id }, cancellationToken);
         }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception ex) { logger?.Error("update", $"Provider {provider.Id} failed for product {product.Id}: {ex.Message}"); return await Persist(product.Id, new(UpdateStatus.Error, Source: provider.Id, Error: ex.Message, CheckedUtc: DateTimeOffset.UtcNow), cancellationToken); }
+        foreach (var provider in providers.OrderBy(x=>Rank(x.Id)))
+        {
+            if (!provider.CanHandle(product, null)) continue;
+            var outcome=await TryProvider(product,null,cancellationToken,provider);
+            if (outcome?.Status == UpdateStatus.Error) lastFailure = outcome;
+            if(outcome is { Status: not UpdateStatus.NotFound and not UpdateStatus.Error })
+            {
+                if(outcome.Status==UpdateStatus.Unknown && !string.IsNullOrWhiteSpace(outcome.ExternalProductId)) await repository.SetUpdateSourceAsync(new ProductUpdateSource(Guid.NewGuid(),product.Id,provider.Id,outcome.ExternalProductId,true,false,MappingSource.ExactMatch,MappingConfidence.Exact),cancellationToken);
+                return await PersistCompared(product,outcome,cancellationToken);
+            }
+        }
+        return await Persist(product.Id,lastFailure ?? new(UpdateStatus.NotFound,Error:"No reliable update source configured",CheckedUtc:DateTimeOffset.UtcNow,ErrorKind:ProviderErrorKind.NotFound),cancellationToken);
     }
     private async Task<UpdateCheckResult> Persist(Guid id, UpdateCheckResult result, CancellationToken token) { await repository.SaveUpdateCheckAsync(id, result, token); return result; }
+    private static int Rank(string id) { var rank=Array.FindIndex(Priority,x=>x.Equals(id,StringComparison.OrdinalIgnoreCase)); return rank<0?int.MaxValue:rank; }
+    private async Task<UpdateCheckResult?> TryProvider(SoftwareProduct product, ProductUpdateSource? source, CancellationToken token, IUpdateProvider? requestedProvider = null) { var provider=requestedProvider ?? (source is null ? providers.OrderBy(x=>Rank(x.Id)).FirstOrDefault(x=>x.CanHandle(product,null)) : providers.FirstOrDefault(x=>x.CanHandle(product,source))); if(provider is null)return null; try { var result=await provider.CheckLatestAsync(product,source,token); return result with { Source=result.Source??provider.Id }; } catch(OperationCanceledException){throw;}catch(Exception ex){logger?.Error("update",$"Provider {provider.Id} failed for product {product.Id}: {ex.Message}");return new(UpdateStatus.Error,Source:provider.Id,ExternalProductId:source?.ExternalId,Error:ex.Message,ErrorKind:ProviderErrorKind.NetworkError);}}
+    private async Task<UpdateCheckResult> PersistCompared(SoftwareProduct product, UpdateCheckResult result, CancellationToken token) { if(result.Status==UpdateStatus.Unknown && result.LatestNormalizedVersion is not null) result=result with { Status=comparer.Compare(product.LatestNormalizedVersion??product.LatestLocalVersion,result.LatestNormalizedVersion) switch { VersionComparisonResult.Older=>UpdateStatus.UpdateAvailable,VersionComparisonResult.Equal=>UpdateStatus.UpToDate,VersionComparisonResult.Newer=>UpdateStatus.LocalNewer,_=>UpdateStatus.Unknown } }; return await Persist(product.Id,result with { CheckedUtc=DateTimeOffset.UtcNow },token); }
 }
 
 public sealed class UpdateCandidateDiscoveryService(IProductCatalogRepository repository, IEnumerable<IUpdateProvider> providers)
 {
     public async Task<IReadOnlyList<UpdateCandidate>> SearchAsync(SoftwareProduct product, bool force, int cacheHours, CancellationToken token)
     {
-        var cached = await repository.SearchUpdateCandidatesAsync(product.Id, force, cacheHours, token);
-        if (cached.Count > 0) return cached;
+        if (!force && await repository.IsUpdateCandidateCacheFreshAsync(product.Id, cacheHours, token)) return await repository.SearchUpdateCandidatesAsync(product.Id, false, cacheHours, token);
         var aliases = await repository.GetProductAliasesAsync(product.Id, token);
         var work = providers.OfType<IUpdateCandidateProvider>().Select(async provider => { try { return await provider.SearchCandidatesAsync(product, aliases, token); } catch (OperationCanceledException) { throw; } catch { return (IReadOnlyList<UpdateCandidate>)[]; } });
         var candidates = (await Task.WhenAll(work)).SelectMany(x => x).OrderBy(x => x.Confidence).ThenBy(x => x.ProviderType, StringComparer.Ordinal).ThenBy(x => x.ExternalId, StringComparer.Ordinal).ToArray();

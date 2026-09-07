@@ -39,7 +39,9 @@ public interface IProductCatalogRepository
     Task ClearUpdateSourcesAsync(Guid productId, string providerType, CancellationToken cancellationToken);
     Task<IReadOnlyList<ProductAlias>> GetProductAliasesAsync(Guid productId, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyList<ProductAlias>>([]);
     Task SetProductAliasAsync(ProductAlias alias, CancellationToken cancellationToken) => Task.CompletedTask;
+    Task RemoveProductAliasAsync(Guid productId, string normalizedAlias, CancellationToken cancellationToken) => Task.CompletedTask;
     Task<IReadOnlyList<UpdateCandidate>> SearchUpdateCandidatesAsync(Guid productId, bool force, int cacheHours, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyList<UpdateCandidate>>([]);
+    Task<bool> IsUpdateCandidateCacheFreshAsync(Guid productId, int cacheHours, CancellationToken cancellationToken) => Task.FromResult(false);
     Task SaveUpdateCandidatesAsync(Guid productId, IReadOnlyList<UpdateCandidate> candidates, DateTimeOffset resolvedUtc, CancellationToken cancellationToken) => Task.CompletedTask;
     Task SaveUpdateCheckAsync(Guid productId, UpdateCheckResult result, CancellationToken cancellationToken);
 }
