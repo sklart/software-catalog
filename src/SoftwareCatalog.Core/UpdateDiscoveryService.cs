@@ -30,14 +30,14 @@ public sealed class UpdateDiscoveryService(IProductCatalogRepository repository,
             if (!provider.CanHandle(product, null)) continue;
             var outcome=await TryProvider(product,null,cancellationToken,provider);
             if (outcome?.Status == UpdateStatus.Error) lastFailure = outcome;
-            if(outcome is { Status: not UpdateStatus.NotFound and not UpdateStatus.Error })
+            if(outcome is { Status: not UpdateStatus.NotFound and not UpdateStatus.Error and not UpdateStatus.Ambiguous })
             {
                 if(outcome.Status==UpdateStatus.Unknown && !string.IsNullOrWhiteSpace(outcome.ExternalProductId)) await repository.SetUpdateSourceAsync(new ProductUpdateSource(Guid.NewGuid(),product.Id,provider.Id,outcome.ExternalProductId,true,false,MappingSource.ExactMatch,MappingConfidence.Exact),cancellationToken);
                 return await PersistCompared(product,outcome,cancellationToken);
             }
         }
         var aliases=await repository.GetProductAliasesAsync(product.Id,cancellationToken);
-        var githubCandidates=(await Task.WhenAll(providers.OfType<IUpdateCandidateProvider>().Select(async candidateProvider => { try { return await candidateProvider.SearchCandidatesAsync(product,aliases,cancellationToken); } catch(OperationCanceledException) { throw; } catch { return (IReadOnlyList<UpdateCandidate>)[]; } }))).SelectMany(x=>x).Where(x=>x.ProviderType.Equals("GitHub",StringComparison.OrdinalIgnoreCase) && x.Confidence is MappingConfidence.Exact or MappingConfidence.High).GroupBy(x=>x.ExternalId,StringComparer.OrdinalIgnoreCase).Select(x=>x.First()).ToArray();
+        var githubCandidates=(await Task.WhenAll(providers.OfType<IUpdateCandidateProvider>().Select(async candidateProvider => { try { return await candidateProvider.SearchCandidatesAsync(product,aliases,cancellationToken); } catch(OperationCanceledException) { throw; } catch { return (IReadOnlyList<UpdateCandidate>)[]; } }))).SelectMany(x=>x).Where(x=>x.ProviderType.Equals("GitHub",StringComparison.OrdinalIgnoreCase) && (x.Confidence is MappingConfidence.Exact or MappingConfidence.High)).GroupBy(x=>x.ExternalId,StringComparer.OrdinalIgnoreCase).Select(x=>x.First()).ToArray();
         if(githubCandidates.Length==1)
         {
             var source=new ProductUpdateSource(Guid.NewGuid(),product.Id,"GitHub",githubCandidates[0].ExternalId,true,false,MappingSource.ProviderSearch,githubCandidates[0].Confidence);
@@ -46,6 +46,7 @@ public sealed class UpdateDiscoveryService(IProductCatalogRepository repository,
             if(outcome is { Status: not UpdateStatus.NotFound and not UpdateStatus.Error }) { await repository.SetUpdateSourceAsync(source,cancellationToken); return await PersistCompared(product,outcome,cancellationToken); }
             if(outcome?.Status==UpdateStatus.Error) lastFailure=outcome;
         }
+        if(githubCandidates.Length>1) return await Persist(product.Id,new(UpdateStatus.Ambiguous,Source:"GitHub",Error:"Multiple high-confidence GitHub candidates",CheckedUtc:DateTimeOffset.UtcNow,ErrorKind:ProviderErrorKind.Ambiguous),cancellationToken);
         return await Persist(product.Id,lastFailure ?? new(UpdateStatus.NotFound,Error:"No reliable update source configured",CheckedUtc:DateTimeOffset.UtcNow,ErrorKind:ProviderErrorKind.NotFound),cancellationToken);
     }
     private async Task<UpdateCheckResult> Persist(Guid id, UpdateCheckResult result, CancellationToken token) { await repository.SaveUpdateCheckAsync(id, result, token); return result; }
