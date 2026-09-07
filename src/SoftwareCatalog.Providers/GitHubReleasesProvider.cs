@@ -20,13 +20,14 @@ public sealed class GitHubReleasesProvider(HttpClient client, ProductNormalizer 
         catch (HttpRequestException ex) { return new(UpdateStatus.Error, Source: Id, ExternalProductId: source.ExternalId, Error: ex.Message); }
         using (response)
         {
-        if (response.StatusCode == HttpStatusCode.NotFound) return new(UpdateStatus.NotFound, Source: Id, ExternalProductId: source.ExternalId);
-        if (response.StatusCode is HttpStatusCode.Forbidden or (HttpStatusCode)429) return new(UpdateStatus.Error, Source: Id, ExternalProductId: source.ExternalId, Error: "GitHub rate limit reached");
-        if (!response.IsSuccessStatusCode) return new(UpdateStatus.Error, Source: Id, ExternalProductId: source.ExternalId, Error: $"GitHub returned {(int)response.StatusCode}");
+        if (response.StatusCode == HttpStatusCode.NotFound) return new(UpdateStatus.NotFound, Source: Id, ExternalProductId: source.ExternalId, ErrorKind: ProviderErrorKind.NotFound);
+        if (response.StatusCode is HttpStatusCode.Forbidden or (HttpStatusCode)429) return new(UpdateStatus.Error, Source: Id, ExternalProductId: source.ExternalId, Error: "GitHub rate limit reached", ErrorKind: ProviderErrorKind.RateLimited);
+        if (response.StatusCode == HttpStatusCode.Unauthorized) return new(UpdateStatus.Error, Source: Id, ExternalProductId: source.ExternalId, Error: "GitHub authentication required", ErrorKind: ProviderErrorKind.AuthenticationRequired);
+        if (!response.IsSuccessStatusCode) return new(UpdateStatus.Error, Source: Id, ExternalProductId: source.ExternalId, Error: $"GitHub returned {(int)response.StatusCode}", ErrorKind: ProviderErrorKind.NetworkError);
         Release? release;
         try { release = await response.Content.ReadFromJsonAsync<Release>(cancellationToken: token); }
-        catch (System.Text.Json.JsonException) { return new(UpdateStatus.Error, Source: Id, ExternalProductId: source.ExternalId, Error: "Malformed GitHub release response"); }
-        if (release?.tag_name is not { Length: > 0 } tag) return new(UpdateStatus.Error, Source: Id, ExternalProductId: source.ExternalId, Error: "Malformed GitHub release response");
+        catch (System.Text.Json.JsonException) { return new(UpdateStatus.Error, Source: Id, ExternalProductId: source.ExternalId, Error: "Malformed GitHub release response", ErrorKind: ProviderErrorKind.InvalidResponse); }
+        if (release?.tag_name is not { Length: > 0 } tag) return new(UpdateStatus.Error, Source: Id, ExternalProductId: source.ExternalId, Error: "Malformed GitHub release response", ErrorKind: ProviderErrorKind.InvalidResponse);
         return new(UpdateStatus.Unknown, tag, normalizer.NormalizeVersion(tag), release.name, release.published_at, Uri.TryCreate(release.html_url, UriKind.Absolute, out var uri) ? uri : null, Id, source.ExternalId);
         }
     }
