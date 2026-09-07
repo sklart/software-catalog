@@ -11,3 +11,8 @@ Software Catalog never installs or executes installers. It does not invoke `wing
 Requires .NET 10 SDK for development. Run `dotnet build`, `dotnet test`, or `./tools/publish-portable.ps1`. The published application stores persistent data only beside the executable: `Data`, `Config`, `Logs`, `Cache`, and `Backups`.
 
 Persistent state remains beside the executable; the default download destination is the portable `Downloads` directory and can be made absolute in settings.
+# Software Catalog
+
+## Update-source diagnostics
+
+`ProviderErrorKind` classifies an individual update-check result (timeout, rate limit, authentication, network, invalid response, ambiguity and not found). It is intentionally session-only: the existing persisted product state retains the human-readable error text, while the structured kind is not persisted across restart. This avoids a schema migration beyond Stage 6 Migration008.
