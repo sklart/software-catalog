@@ -17,7 +17,7 @@ internal sealed class Migration008ProductMappings : IMigration
         if (!columns.Contains("updated_utc")) changes.Add("ALTER TABLE product_update_sources ADD COLUMN updated_utc TEXT NOT NULL DEFAULT ''");
         foreach(var change in changes) { command.CommandText=change; await command.ExecuteNonQueryAsync(cancellationToken); }
         command.CommandText="""
-            UPDATE product_update_sources SET source=CASE WHEN is_explicit=1 THEN 0 ELSE 5 END, confidence=CASE WHEN is_explicit=1 THEN 0 ELSE 2 END, created_utc=CASE WHEN created_utc='' THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE created_utc END, updated_utc=CASE WHEN updated_utc='' THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE updated_utc END;
+            UPDATE product_update_sources SET source=CASE WHEN is_explicit=1 THEN 0 ELSE 2 END, confidence=CASE WHEN is_explicit=1 THEN 0 ELSE 1 END, created_utc=CASE WHEN created_utc='' THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE created_utc END, updated_utc=CASE WHEN updated_utc='' THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE updated_utc END;
             CREATE TABLE IF NOT EXISTS product_aliases(product_id TEXT NOT NULL,alias TEXT NOT NULL,normalized_alias TEXT NOT NULL,source INTEGER NOT NULL DEFAULT 5,PRIMARY KEY(product_id,normalized_alias),FOREIGN KEY(product_id) REFERENCES software_products(id) ON DELETE CASCADE);
             CREATE TABLE IF NOT EXISTS update_candidate_cache(product_id TEXT NOT NULL,provider_type TEXT NOT NULL,external_id TEXT NOT NULL,display_name TEXT NOT NULL,publisher_or_owner TEXT,latest_version TEXT,confidence INTEGER NOT NULL,reason TEXT NOT NULL,resolved_utc TEXT NOT NULL,PRIMARY KEY(product_id,provider_type,external_id));
             """;

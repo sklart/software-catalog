@@ -16,8 +16,8 @@ public sealed class GitHubReleasesProvider(HttpClient client, ProductNormalizer 
         using var request = new HttpRequestMessage(HttpMethod.Get, $"repos/{source.ExternalId}/releases/latest");
         HttpResponseMessage response;
         try { response = await client.SendAsync(request, token); }
-        catch (OperationCanceledException) when (!token.IsCancellationRequested) { return new(UpdateStatus.Error, Source: Id, ExternalProductId: source.ExternalId, Error: "GitHub request timed out"); }
-        catch (HttpRequestException ex) { return new(UpdateStatus.Error, Source: Id, ExternalProductId: source.ExternalId, Error: ex.Message); }
+        catch (OperationCanceledException) when (!token.IsCancellationRequested) { return new(UpdateStatus.Error, Source: Id, ExternalProductId: source.ExternalId, Error: "GitHub request timed out", ErrorKind: ProviderErrorKind.Timeout); }
+        catch (HttpRequestException ex) { return new(UpdateStatus.Error, Source: Id, ExternalProductId: source.ExternalId, Error: ex.Message, ErrorKind: ProviderErrorKind.NetworkError); }
         using (response)
         {
         if (response.StatusCode == HttpStatusCode.NotFound) return new(UpdateStatus.NotFound, Source: Id, ExternalProductId: source.ExternalId, ErrorKind: ProviderErrorKind.NotFound);

@@ -36,6 +36,16 @@ public sealed class UpdateDiscoveryService(IProductCatalogRepository repository,
                 return await PersistCompared(product,outcome,cancellationToken);
             }
         }
+        var aliases=await repository.GetProductAliasesAsync(product.Id,cancellationToken);
+        var githubCandidates=(await Task.WhenAll(providers.OfType<IUpdateCandidateProvider>().Select(async candidateProvider => { try { return await candidateProvider.SearchCandidatesAsync(product,aliases,cancellationToken); } catch(OperationCanceledException) { throw; } catch { return (IReadOnlyList<UpdateCandidate>)[]; } }))).SelectMany(x=>x).Where(x=>x.ProviderType.Equals("GitHub",StringComparison.OrdinalIgnoreCase) && x.Confidence is MappingConfidence.Exact or MappingConfidence.High).GroupBy(x=>x.ExternalId,StringComparer.OrdinalIgnoreCase).Select(x=>x.First()).ToArray();
+        if(githubCandidates.Length==1)
+        {
+            var source=new ProductUpdateSource(Guid.NewGuid(),product.Id,"GitHub",githubCandidates[0].ExternalId,true,false,MappingSource.ProviderSearch,githubCandidates[0].Confidence);
+            var outcome=await TryProvider(product,source,cancellationToken);
+            if(outcome?.Status==UpdateStatus.NotFound) { var tags=providers.FirstOrDefault(x=>x.Id.Equals("GitHubTags",StringComparison.OrdinalIgnoreCase)); if(tags is not null) outcome=await TryProvider(product,source with { ProviderType="GitHubTags" },cancellationToken,tags); }
+            if(outcome is { Status: not UpdateStatus.NotFound and not UpdateStatus.Error }) { await repository.SetUpdateSourceAsync(source,cancellationToken); return await PersistCompared(product,outcome,cancellationToken); }
+            if(outcome?.Status==UpdateStatus.Error) lastFailure=outcome;
+        }
         return await Persist(product.Id,lastFailure ?? new(UpdateStatus.NotFound,Error:"No reliable update source configured",CheckedUtc:DateTimeOffset.UtcNow,ErrorKind:ProviderErrorKind.NotFound),cancellationToken);
     }
     private async Task<UpdateCheckResult> Persist(Guid id, UpdateCheckResult result, CancellationToken token) { await repository.SaveUpdateCheckAsync(id, result, token); return result; }

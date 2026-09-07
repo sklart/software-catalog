@@ -21,13 +21,13 @@ public sealed class WinGetProvider(IWinGetClient client, ProductNormalizer norma
             var enriched = await Task.WhenAll(candidates.Where(candidate => normalizer.Normalize(candidate.Name) == product.NormalizedName).Select(async candidate => await client.ShowAsync(candidate.Id, token) ?? candidate));
             var matches = enriched.Where(candidate => !string.IsNullOrWhiteSpace(candidate.Name) && normalizer.Normalize(candidate.Name) == product.NormalizedName && (string.IsNullOrWhiteSpace(product.Publisher) || (!string.IsNullOrWhiteSpace(candidate.Publisher) && normalizer.Normalize(candidate.Publisher) == normalizer.Normalize(product.Publisher)))).ToArray();
             if (matches.Length == 0) return new(UpdateStatus.NotFound, Source: Id);
-            if (matches.Length != 1) return new(UpdateStatus.Ambiguous, Source: Id, Error: "Multiple plausible WinGet packages");
+            if (matches.Length != 1) return new(UpdateStatus.Ambiguous, Source: Id, Error: "Multiple plausible WinGet packages", ErrorKind: ProviderErrorKind.Ambiguous);
             var candidate = matches[0];
             return new(UpdateStatus.Unknown, candidate.Version, normalizer.NormalizeVersion(candidate.Version), candidate.Name, null, null, Id, candidate.Id);
         }
         var package = await client.ShowAsync(source.ExternalId, token);
         if (package is null) return new(UpdateStatus.NotFound, Source: Id, ExternalProductId: source.ExternalId);
-        if (normalizer.Normalize(package.Name) != product.NormalizedName || (!string.IsNullOrWhiteSpace(product.Publisher) && !string.IsNullOrWhiteSpace(package.Publisher) && normalizer.Normalize(product.Publisher) != normalizer.Normalize(package.Publisher))) return new(UpdateStatus.Ambiguous, Source: Id, ExternalProductId: source.ExternalId, Error: "WinGet package does not conclusively match product");
+        if (normalizer.Normalize(package.Name) != product.NormalizedName || (!string.IsNullOrWhiteSpace(product.Publisher) && !string.IsNullOrWhiteSpace(package.Publisher) && normalizer.Normalize(product.Publisher) != normalizer.Normalize(package.Publisher))) return new(UpdateStatus.Ambiguous, Source: Id, ExternalProductId: source.ExternalId, Error: "WinGet package does not conclusively match product", ErrorKind: ProviderErrorKind.Ambiguous);
         return new(UpdateStatus.Unknown, package.Version, normalizer.NormalizeVersion(package.Version), package.Name, null, null, Id, package.Id);
     }
     public async Task<IReadOnlyList<UpdateCandidate>> SearchCandidatesAsync(SoftwareProduct product, IReadOnlyList<ProductAlias> aliases, CancellationToken token)
