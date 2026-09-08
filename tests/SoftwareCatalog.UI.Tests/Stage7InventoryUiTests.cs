@@ -1,10 +1,17 @@
 using SoftwareCatalog.Core;
 using SoftwareCatalog.Core.Domain;
+using SoftwareCatalog.UI;
 
 namespace SoftwareCatalog.UI.Tests;
 
 public sealed class Stage7InventoryUiTests
 {
+    [Fact]
+    public void ManualBindChangeAndClearProduceRepositoryBindings()
+    {
+        var first=Guid.NewGuid(); var second=Guid.NewGuid(); var bind=InstalledSoftwareWorkflow.Bind(first); var change=InstalledSoftwareWorkflow.Bind(second); var clear=InstalledSoftwareWorkflow.Clear();
+        Assert.Equal(first,bind.ProductId); Assert.Equal(InstalledSoftwareMatchSource.Manual,bind.Source); Assert.Equal(second,change.ProductId); Assert.Equal(InstalledSoftwareMatchConfidence.Exact,change.Confidence); Assert.Null(clear.ProductId); Assert.Equal(InstalledSoftwareMatchSource.ManualReview,clear.Source);
+    }
     [Fact]
     public void InventoryRowsExposeLatestVersionUpdateStatusAndProductSummary()
     {
