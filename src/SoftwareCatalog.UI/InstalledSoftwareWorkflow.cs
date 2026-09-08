@@ -5,10 +5,12 @@ namespace SoftwareCatalog.UI;
 
 public enum InstalledSoftwareFilter { All, UpdatesAvailable, Matched, Unmatched, Problems }
 
+public sealed record ProductColumnDescriptor(string Header, string BindingProperty, bool IsCheckBox = false);
+
 public static class InstalledSoftwareWorkflow
 {
     public static readonly (string Label, InstalledSoftwareFilter Filter)[] Filters = [("All", InstalledSoftwareFilter.All), ("Updates available", InstalledSoftwareFilter.UpdatesAvailable), ("Matched", InstalledSoftwareFilter.Matched), ("Unmatched", InstalledSoftwareFilter.Unmatched), ("Problems", InstalledSoftwareFilter.Problems)];
-    public static readonly string[] ProductColumnHeaders = ["Installed", "Installed versions", "Installed copies", "Architectures", "Installed update status"];
+    public static readonly ProductColumnDescriptor[] ProductColumns = [new("Installed", "IsInstalled", true), new("Installed versions", "InstalledVersions"), new("Installed copies", "InstalledCopiesCount"), new("Architectures", "InstalledArchitectures"), new("Installed update status", "InstalledUpdateStatus")];
     public static bool Includes(InstalledSoftwareRow row, InstalledSoftwareFilter filter) => filter switch
     {
         InstalledSoftwareFilter.All => true,

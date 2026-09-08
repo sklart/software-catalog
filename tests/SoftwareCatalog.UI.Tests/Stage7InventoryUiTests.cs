@@ -29,7 +29,7 @@ public sealed class Stage7InventoryUiTests
     }
 
     [Fact]
-    public void ProductColumnsAreDeclaredForMainGrid() => Assert.Equal(["Installed", "Installed versions", "Installed copies", "Architectures", "Installed update status"], InstalledSoftwareWorkflow.ProductColumnHeaders);
+    public void ProductColumnsDescriptorHasHeadersAndBindingsUsedByMainGrid() => Assert.Equal([new ProductColumnDescriptor("Installed", "IsInstalled", true), new ProductColumnDescriptor("Installed versions", "InstalledVersions"), new ProductColumnDescriptor("Installed copies", "InstalledCopiesCount"), new ProductColumnDescriptor("Architectures", "InstalledArchitectures"), new ProductColumnDescriptor("Installed update status", "InstalledUpdateStatus")], InstalledSoftwareWorkflow.ProductColumns);
 
     [Fact]
     public void ProductSelectionWorkflowSelectsOrdersAndCancels()
