@@ -60,9 +60,10 @@ public sealed class InstallerArchiveServiceTests : IDisposable
     {
         var source=Path.Combine(_folder,"progress"); Directory.CreateDirectory(source); var path=Path.Combine(source,"tool.exe"); await File.WriteAllBytesAsync(path,new byte[150_000]);
         var repo=new Repo(new ScanRoot(1,source,ScanRootPathKind.Absolute,true,true,DateTimeOffset.UtcNow,DateTimeOffset.UtcNow)); var file=FileRecord() with { Size=150_000 }; repo.Files.Add(file); var reported = new List<ArchiveProgress>();
-        var result=await Service(repo).ArchiveAsync(file,CancellationToken.None,new Progress<ArchiveProgress>(reported.Add));
+        var result=await Service(repo).ArchiveAsync(file,CancellationToken.None,new CaptureProgress(reported));
         Assert.Equal(ArchiveOperationStatus.Completed,result.Status); Assert.Contains(reported, item => item.BytesProcessed > 0 && item.Status == ArchiveOperationStatus.Running); Assert.Equal(150_000,reported.Last().BytesProcessed);
     }
+    private sealed class CaptureProgress(List<ArchiveProgress> reported) : IProgress<ArchiveProgress> { public void Report(ArchiveProgress value) => reported.Add(value); }
     [Fact] public async Task CrossVolumeArchiveCopiesVerifiesFinalizesUpdatesDatabaseThenDeletesSource()
     {
         var source = Path.Combine(_folder, "cross-volume-source"); Directory.CreateDirectory(source); var path = Path.Combine(source, "tool.exe"); await File.WriteAllTextAsync(path, "content");
