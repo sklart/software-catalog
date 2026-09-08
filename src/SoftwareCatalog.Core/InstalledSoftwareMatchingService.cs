@@ -30,7 +30,7 @@ public sealed class InstalledSoftwareInventoryService(IEnumerable<IInstalledSoft
     {
         var started = DateTimeOffset.UtcNow;
         var raw = (await Task.WhenAll(sources.Select(source => source.ReadAsync(token)))).SelectMany(x => x);
-        var distinct = raw.GroupBy(x => string.Join("|", x.NormalizedName, x.Publisher?.Trim().ToUpperInvariant(), x.NormalizedVersion, x.Architecture, x.InstallLocation?.Trim().ToUpperInvariant())).Select(g => g.OrderByDescending(x => x.Source == InstalledSoftwareSource.Msix).First()).ToList();
+        var distinct = raw.GroupBy(x => string.Join("|", x.ExternalId?.Trim().ToUpperInvariant() ?? x.NormalizedName, x.Publisher?.Trim().ToUpperInvariant(), x.NormalizedVersion, x.Architecture?.Trim().ToUpperInvariant(), x.InstallLocation?.Trim().ToUpperInvariant())).Select(g => g.OrderByDescending(x => x.Source == InstalledSoftwareSource.Msix).ThenBy(x => x.Source).ThenBy(x => x.DisplayName, StringComparer.OrdinalIgnoreCase).First()).ToList();
         await repository.UpsertInstalledSoftwareAsync(distinct, started, token);
         await matching.MatchAsync(repository, catalog, token);
     }

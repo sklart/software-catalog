@@ -26,7 +26,12 @@ public sealed record SoftwareProduct(
     string? UpdateProvider = null,
     string? ExternalProductId = null,
     DateTimeOffset? LastCheckedUtc = null,
-    string? UpdateError = null);
+    string? UpdateError = null,
+    bool IsInstalled = false,
+    string? InstalledVersions = null,
+    int InstalledCopiesCount = 0,
+    string? InstalledArchitectures = null,
+    InstalledUpdateStatus InstalledUpdateStatus = InstalledUpdateStatus.Unknown);
 
 public sealed record ProductUpdateSource(Guid Id, Guid ProductId, string ProviderType, string ExternalId, bool Enabled = true, bool IsExplicit = false, MappingSource Source = MappingSource.Manual, MappingConfidence Confidence = MappingConfidence.Exact, DateTimeOffset? CreatedUtc = null, DateTimeOffset? UpdatedUtc = null);
 public sealed record ProductAlias(Guid ProductId, string Alias, string NormalizedAlias, MappingSource Source = MappingSource.ProviderSearch);
