@@ -31,5 +31,12 @@ public sealed class Stage7InventoryUiTests
     [Fact]
     public void ProductColumnsAreDeclaredForMainGrid() => Assert.Equal(["Installed", "Installed versions", "Installed copies", "Architectures", "Installed update status"], InstalledSoftwareWorkflow.ProductColumnHeaders);
 
+    [Fact]
+    public void ProductSelectionWorkflowSelectsOrdersAndCancels()
+    {
+        var now=DateTimeOffset.UtcNow; var zulu=new SoftwareProduct(Guid.NewGuid(),"Zulu",null,"zulu",now,now); var alpha=new SoftwareProduct(Guid.NewGuid(),"Alpha",null,"alpha",now,now);
+        Assert.Equal([alpha,zulu],ProductSelectionWorkflow.Order([zulu,alpha])); Assert.Equal(alpha,ProductSelectionWorkflow.Confirm(alpha)); Assert.Null(ProductSelectionWorkflow.Confirm(null)); Assert.Null(ProductSelectionWorkflow.Cancel());
+    }
+
     private static InstalledSoftwareRow Row(Guid? productId, InstalledUpdateStatus status, InstalledSoftwareMatchConfidence confidence, bool exists, DateTimeOffset now) => new(new InstalledSoftware(1, "Tool", "1.0", "Vendor", "tool", "1.0", null, null, "x64", InstalledSoftwareSource.Hklm64Uninstall, null, productId, InstalledSoftwareMatchSource.ManualReview, confidence, now, now, exists), productId is null ? null : "Tool", "2.0", status);
 }
