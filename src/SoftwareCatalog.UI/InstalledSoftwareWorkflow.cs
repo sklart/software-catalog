@@ -7,6 +7,8 @@ public enum InstalledSoftwareFilter { All, UpdatesAvailable, Matched, Unmatched,
 
 public static class InstalledSoftwareWorkflow
 {
+    public static readonly (string Label, InstalledSoftwareFilter Filter)[] Filters = [("All", InstalledSoftwareFilter.All), ("Updates available", InstalledSoftwareFilter.UpdatesAvailable), ("Matched", InstalledSoftwareFilter.Matched), ("Unmatched", InstalledSoftwareFilter.Unmatched), ("Problems", InstalledSoftwareFilter.Problems)];
+    public static readonly string[] ProductColumnHeaders = ["Installed", "Installed versions", "Installed copies", "Architectures", "Installed update status"];
     public static bool Includes(InstalledSoftwareRow row, InstalledSoftwareFilter filter) => filter switch
     {
         InstalledSoftwareFilter.All => true,
