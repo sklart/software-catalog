@@ -4,7 +4,20 @@ using SoftwareCatalog.UI.ViewModels;
 namespace SoftwareCatalog.UI;
 public partial class MainWindow : Window
 {
-    public MainWindow() { InitializeComponent(); Loaded += (_, _) => { AddDownloadButton(); AddArchiveControls(); }; }
+    public MainWindow() { InitializeComponent(); Loaded += (_, _) => { AddDownloadButton(); AddArchiveControls(); AddInstalledSoftwareControls(); }; }
+    private void AddInstalledSoftwareControls()
+    {
+        if (DataContext is not MainViewModel viewModel || viewModel.RefreshInstalledCommand is null) return;
+        var products = FindGroup(this, "Продукты"); var dock = products?.Content as DockPanel; var panel = dock?.Children.OfType<StackPanel>().FirstOrDefault();
+        if (panel is null || panel.Children.OfType<Button>().Any(button => Equals(button.Command, viewModel.RefreshInstalledCommand))) return;
+        var open = new Button { Content = "Установленное ПО", Margin = new Thickness(8, 0, 0, 0) }; open.Click += (_, _) => ShowInstalledSoftware(viewModel); panel.Children.Add(open);
+    }
+    private void ShowInstalledSoftware(MainViewModel viewModel)
+    {
+        var grid = new DataGrid { ItemsSource = viewModel.InstalledSoftware, AutoGenerateColumns = false, IsReadOnly = true, MinHeight = 360 };
+        grid.Columns.Add(new DataGridTextColumn { Header = "Name", Binding = new System.Windows.Data.Binding("DisplayName") }); grid.Columns.Add(new DataGridTextColumn { Header = "Installed version", Binding = new System.Windows.Data.Binding("DisplayVersion") }); grid.Columns.Add(new DataGridTextColumn { Header = "Publisher", Binding = new System.Windows.Data.Binding("Publisher") }); grid.Columns.Add(new DataGridTextColumn { Header = "Architecture", Binding = new System.Windows.Data.Binding("Architecture") }); grid.Columns.Add(new DataGridTextColumn { Header = "Source", Binding = new System.Windows.Data.Binding("Source") }); grid.Columns.Add(new DataGridTextColumn { Header = "Matched product", Binding = new System.Windows.Data.Binding("ProductId") }); grid.Columns.Add(new DataGridTextColumn { Header = "Match", Binding = new System.Windows.Data.Binding("MatchConfidence") }); grid.Columns.Add(new DataGridTextColumn { Header = "Install location", Binding = new System.Windows.Data.Binding("InstallLocation") });
+        grid.SetBinding(DataGrid.SelectedItemProperty, new System.Windows.Data.Binding(nameof(MainViewModel.SelectedInstalledSoftware)) { Mode = System.Windows.Data.BindingMode.TwoWay }); var refresh = new Button { Content = "Обновить inventory", Command = viewModel.RefreshInstalledCommand }; var bind = new Button { Content = "Привязать к продукту", Command = viewModel.BindInstalledCommand, Margin = new Thickness(8,0,0,0) }; var clear = new Button { Content = "Очистить привязку", Command = viewModel.ClearInstalledBindingCommand, Margin = new Thickness(8,0,0,0) }; var controls = new StackPanel { Orientation = Orientation.Horizontal }; controls.Children.Add(refresh); controls.Children.Add(bind); controls.Children.Add(clear); var panel = new DockPanel { Margin = new Thickness(12) }; DockPanel.SetDock(controls, Dock.Bottom); controls.Margin = new Thickness(0, 8, 0, 0); panel.Children.Add(controls); panel.Children.Add(grid); new Window { Title = "Установленное ПО", Content = panel, Owner = this, Width = 1200, Height = 520 }.ShowDialog();
+    }
     private void AddDownloadButton()
     {
         if (DataContext is not MainViewModel viewModel) return;

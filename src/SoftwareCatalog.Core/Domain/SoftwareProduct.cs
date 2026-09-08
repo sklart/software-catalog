@@ -7,6 +7,10 @@ public enum VersionComparisonResult { Older, Equal, Newer, Unknown }
 public enum MappingConfidence { Exact, High, Medium, Low, Ambiguous }
 public enum MappingSource { Manual, Imported, ExactMatch, NormalizedName, PublisherName, ProviderSearch }
 public enum ProviderErrorKind { Timeout, RateLimited, NotFound, AuthenticationRequired, NetworkError, InvalidResponse, Ambiguous }
+public enum InstalledSoftwareSource { Hklm64Uninstall, Hklm32Uninstall, HkcuUninstall, Msi, Msix }
+public enum InstalledSoftwareMatchSource { Explicit, ExternalIdentity, NameAndPublisher, Alias, NormalizedName, ManualReview, Manual }
+public enum InstalledSoftwareMatchConfidence { None, Low, Medium, High, Exact, Ambiguous }
+public enum InstalledUpdateStatus { Unknown, UpdateAvailable, UpToDate, InstalledNewer }
 
 public sealed record SoftwareProduct(
     Guid Id,
@@ -28,3 +32,5 @@ public sealed record ProductUpdateSource(Guid Id, Guid ProductId, string Provide
 public sealed record ProductAlias(Guid ProductId, string Alias, string NormalizedAlias, MappingSource Source = MappingSource.ProviderSearch);
 public sealed record UpdateCandidate(string ProviderType, string ExternalId, string DisplayName, string? PublisherOrOwner, string? LatestVersion, MappingConfidence Confidence, string Reason);
 public sealed record UpdateCheckResult(UpdateStatus Status, string? LatestVersion = null, string? LatestNormalizedVersion = null, string? ReleaseName = null, DateTimeOffset? ReleaseDate = null, Uri? DownloadPageUrl = null, string? Source = null, string? ExternalProductId = null, string? Error = null, DateTimeOffset? CheckedUtc = null, ProviderErrorKind? ErrorKind = null);
+public sealed record InstalledSoftware(long Id, string DisplayName, string? DisplayVersion, string? Publisher, string NormalizedName, string? NormalizedVersion, string? InstallLocation, DateTimeOffset? InstallDate, string? Architecture, InstalledSoftwareSource Source, string? ExternalId, Guid? ProductId, InstalledSoftwareMatchSource? MatchSource, InstalledSoftwareMatchConfidence? MatchConfidence, DateTimeOffset FirstSeenUtc, DateTimeOffset LastSeenUtc, bool Exists);
+public sealed record InstalledSoftwareStatus(InstalledSoftware Installed, string? LatestVersion, InstalledUpdateStatus UpdateStatus);

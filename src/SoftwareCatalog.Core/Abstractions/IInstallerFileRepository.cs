@@ -45,3 +45,15 @@ public interface IProductCatalogRepository
     Task SaveUpdateCandidatesAsync(Guid productId, IReadOnlyList<UpdateCandidate> candidates, DateTimeOffset resolvedUtc, CancellationToken cancellationToken) => Task.CompletedTask;
     Task SaveUpdateCheckAsync(Guid productId, UpdateCheckResult result, CancellationToken cancellationToken);
 }
+
+public interface IInstalledSoftwareRepository
+{
+    Task<IReadOnlyList<InstalledSoftware>> GetInstalledSoftwareAsync(CancellationToken cancellationToken);
+    Task UpsertInstalledSoftwareAsync(IReadOnlyList<InstalledSoftware> software, DateTimeOffset refreshStartedUtc, CancellationToken cancellationToken);
+    Task SetInstalledSoftwareBindingAsync(long installedSoftwareId, Guid? productId, InstalledSoftwareMatchSource? source, InstalledSoftwareMatchConfidence? confidence, CancellationToken cancellationToken);
+}
+
+public interface IInstalledSoftwareSource
+{
+    Task<IReadOnlyList<InstalledSoftware>> ReadAsync(CancellationToken cancellationToken);
+}
