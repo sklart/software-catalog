@@ -9,11 +9,20 @@ public sealed class InstalledSoftwareMatchingService(ProductNormalizer normalize
     {
         var products = await catalog.GetProductsAsync(token);
         var aliases = new Dictionary<Guid, HashSet<string>>();
-        foreach (var product in products) aliases[product.Id] = (await catalog.GetProductAliasesAsync(product.Id, token)).Select(x => x.NormalizedAlias).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var localIdentities = new Dictionary<Guid, HashSet<string>>();
+        foreach (var product in products)
+        {
+            aliases[product.Id] = (await catalog.GetProductAliasesAsync(product.Id, token)).Select(x => x.NormalizedAlias).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            localIdentities[product.Id] = (await catalog.GetInstallersForProductAsync(product.Id, token))
+                .SelectMany(file => new[] { file.ProductCode, file.MsixIdentityName, file.UpgradeCode })
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Select(value => value!)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        }
         foreach (var item in await inventory.GetInstalledSoftwareAsync(token))
         {
             if (!item.Exists || item.MatchSource is InstalledSoftwareMatchSource.Manual or InstalledSoftwareMatchSource.Explicit) continue;
-            var candidates = products.Where(p => !string.IsNullOrWhiteSpace(item.ExternalId) && string.Equals(p.ExternalProductId, item.ExternalId, StringComparison.OrdinalIgnoreCase)).ToArray();
+            var candidates = products.Where(p => !string.IsNullOrWhiteSpace(item.ExternalId) && localIdentities[p.Id].Contains(item.ExternalId)).ToArray();
             var source = InstalledSoftwareMatchSource.ExternalIdentity; var confidence = InstalledSoftwareMatchConfidence.Exact;
             if (candidates.Length == 0) { candidates = products.Where(p => p.NormalizedName == item.NormalizedName && !string.IsNullOrWhiteSpace(p.Publisher) && normalizer.Normalize(p.Publisher) == normalizer.Normalize(item.Publisher)).ToArray(); source = InstalledSoftwareMatchSource.NameAndPublisher; confidence = InstalledSoftwareMatchConfidence.High; }
             if (candidates.Length == 0) { candidates = products.Where(p => aliases.TryGetValue(p.Id, out var values) && values.Contains(item.NormalizedName)).ToArray(); source = InstalledSoftwareMatchSource.Alias; confidence = InstalledSoftwareMatchConfidence.Medium; }

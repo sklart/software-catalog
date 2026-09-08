@@ -23,10 +23,13 @@ public sealed class InstalledSoftwareMatchingServiceTests
         Assert.Null(nameOnly.BoundProductId); Assert.Equal(InstalledSoftwareMatchSource.ManualReview,nameOnly.Source);
     }
     [Fact]
-    public async Task ExternalIdentityWinsAndManualBindingSurvivesRematch()
+    public async Task LocalExternalIdentityWinsButUpdateSourceIdentityIsIgnored()
     {
         var product=Product("Different name",null) with { ExternalProductId="Contoso.Tool" }; var inventory=new MemoryInventory(Installed("Tool",null) with { ExternalId="Contoso.Tool" }); var service=new InstalledSoftwareMatchingService(new ProductNormalizer());
-        await service.MatchAsync(inventory,new MemoryCatalog(product),CancellationToken.None); Assert.Equal(product.Id,inventory.BoundProductId); Assert.Equal(InstalledSoftwareMatchSource.ExternalIdentity,inventory.Source);
+        await service.MatchAsync(inventory,new MemoryCatalog(product),CancellationToken.None); Assert.Null(inventory.BoundProductId); Assert.Equal(InstalledSoftwareMatchSource.ManualReview,inventory.Source);
+        var installer = new InstallerFile(1, 1, "tool.msi", "tool.msi", ".msi", 1, DateTimeOffset.UtcNow, null, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, true, ProductCode: "{LOCAL-PRODUCT-CODE}");
+        inventory=new MemoryInventory(Installed("Tool",null) with { ExternalId="{LOCAL-PRODUCT-CODE}" });
+        await service.MatchAsync(inventory,new MemoryCatalog([product], [], [installer]),CancellationToken.None); Assert.Equal(product.Id,inventory.BoundProductId); Assert.Equal(InstalledSoftwareMatchSource.ExternalIdentity,inventory.Source);
         var manual=new MemoryInventory(Installed("Other",null) with { ProductId=product.Id, MatchSource=InstalledSoftwareMatchSource.Manual, MatchConfidence=InstalledSoftwareMatchConfidence.Exact }); await service.MatchAsync(manual,new MemoryCatalog(Product("Other",null)),CancellationToken.None); Assert.Null(manual.Source);
     }
     [Fact]
@@ -73,11 +76,11 @@ public sealed class InstalledSoftwareMatchingServiceTests
     private sealed class StaticSource(IReadOnlyList<InstalledSoftware> items) : IInstalledSoftwareSource { public Task<IReadOnlyList<InstalledSoftware>> ReadAsync(CancellationToken token)=>Task.FromResult(items); }
     private sealed class MemoryCatalog : IProductCatalogRepository
     {
-        private readonly SoftwareProduct[] _products; private readonly ProductAlias[] _aliases;
-        public MemoryCatalog(SoftwareProduct product,params ProductAlias[] aliases) : this([product],aliases) { } public MemoryCatalog(SoftwareProduct[] products,params ProductAlias[] aliases){_products=products;_aliases=aliases;}
+        private readonly SoftwareProduct[] _products; private readonly ProductAlias[] _aliases; private readonly InstallerFile[] _installers;
+        public MemoryCatalog(SoftwareProduct product,params ProductAlias[] aliases) : this([product],aliases,[]) { } public MemoryCatalog(SoftwareProduct[] products,params ProductAlias[] aliases) : this(products,aliases,[]) { } public MemoryCatalog(SoftwareProduct[] products,ProductAlias[] aliases,InstallerFile[] installers){_products=products;_aliases=aliases;_installers=installers;}
         public Task<IReadOnlyList<SoftwareProduct>> GetProductsAsync(CancellationToken token)=>Task.FromResult<IReadOnlyList<SoftwareProduct>>(_products);
         public Task<IReadOnlyList<ProductAlias>> GetProductAliasesAsync(Guid id,CancellationToken token)=>Task.FromResult<IReadOnlyList<ProductAlias>>(_aliases.Where(alias=>alias.ProductId==id).ToArray());
-        public Task<IReadOnlyList<InstallerFile>> GetInstallersForProductAsync(Guid id,CancellationToken token)=>Task.FromResult<IReadOnlyList<InstallerFile>>([]);
+        public Task<IReadOnlyList<InstallerFile>> GetInstallersForProductAsync(Guid id,CancellationToken token)=>Task.FromResult<IReadOnlyList<InstallerFile>>(_installers.Where(file => file.ProductId is null || file.ProductId == id).ToArray());
         public Task<SoftwareProduct> UpsertProductAsync(SoftwareProduct p,CancellationToken token)=>Task.FromResult(p);
         public Task LinkInstallerAsync(long id,Guid p,ProductMatchSource s,ProductMatchConfidence c,CancellationToken token)=>Task.CompletedTask;
         public Task<IReadOnlyList<ProductUpdateSource>> GetUpdateSourcesAsync(Guid id,CancellationToken token)=>Task.FromResult<IReadOnlyList<ProductUpdateSource>>([]);
