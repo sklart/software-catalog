@@ -48,7 +48,10 @@ public partial class MainWindow : Window
         files.Columns.Add(new DataGridTextColumn { Header = "Размер", Binding = new System.Windows.Data.Binding("Size") }); files.Columns.Add(new DataGridTextColumn { Header = "Состояние", Binding = new System.Windows.Data.Binding("StorageState") }); files.Columns.Add(new DataGridCheckBoxColumn { Header = "Закреплён", Binding = new System.Windows.Data.Binding("IsPinned") }); files.Columns.Add(new DataGridTextColumn { Header = "SHA-256", Binding = new System.Windows.Data.Binding("Sha256") }); files.Columns.Add(new DataGridTextColumn { Header = "Последнее обнаружение", Binding = new System.Windows.Data.Binding("LastSeenUtc") });
         var actions = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
         actions.Children.Add(new Button { Content = "Архивировать", Command = viewModel.ArchiveCommand }); actions.Children.Add(new Button { Content = "Восстановить", Command = viewModel.RestoreCommand, Margin = new Thickness(8,0,0,0) }); actions.Children.Add(new Button { Content = "В корзину", Command = viewModel.TrashCommand, Margin = new Thickness(8,0,0,0) }); actions.Children.Add(new Button { Content = "Закрепить / открепить", Command = viewModel.PinCommand, Margin = new Thickness(8,0,0,0) }); actions.Children.Add(new Button { Content = "Корзина", Margin = new Thickness(8,0,0,0) }); ((Button)actions.Children[^1]).Click += (_, _) => ShowTrash(viewModel);
-        var dock = new DockPanel(); DockPanel.SetDock(actions, Dock.Top); dock.Children.Add(actions); dock.Children.Add(files); history.Content = dock;
+        var dock = new DockPanel(); DockPanel.SetDock(actions, Dock.Top); dock.Children.Add(actions);
+        history.Content = null;
+        dock.Children.Add(files);
+        history.Content = dock;
     }
     private void ShowTrash(MainViewModel viewModel)
     {
